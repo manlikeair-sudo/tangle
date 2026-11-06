@@ -14,7 +14,23 @@ export function makeRopeState(rope) {
  * Hard-capped so TubeGeometry never sees scribble noise.
  */
 export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
-  let path = [{ x: ax, y: ay }, { x: bx, y: by }];
+  // Seed a slack S-curve longer than the chord so ropes drape, not cable-stretch
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;
+  const seed = (ax * 0.013 + ay * 0.017 + bx * 0.011) % 1;
+  const amp = len * (0.22 + (seed % 0.12));
+  let path = [{ x: ax, y: ay }];
+  const midN = 5;
+  for (let i = 1; i < midN; i++) {
+    const t = i / midN;
+    const s = Math.sin(t * Math.PI * 2) * Math.sin(t * Math.PI);
+    path.push({
+      x: ax + dx * t + nx * s * amp,
+      y: ay + dy * t + ny * s * amp,
+    });
+  }
+  path.push({ x: bx, y: by });
 
   for (let pass = 0; pass < 10; pass++) {
     if (path.length > 28) break;
@@ -50,11 +66,13 @@ export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
         const tx = -uy, ty = ux;
         const wx = best.x + ux * clearance;
         const wy = best.y + uy * clearance;
-        // 3-point arc (prev-tangent, apex, next-tangent)
-        const span = clearance * 1.25;
-        next.push({ x: wx - tx * span, y: wy - ty * span });
-        next.push({ x: wx, y: wy });
-        next.push({ x: wx + tx * span, y: wy + ty * span });
+        // Circular-ish wrap: 5 samples on the clearance circle (stable, round bends)
+        const base = Math.atan2(uy, ux);
+        const half = 1.05; // radians either side
+        for (let k = -2; k <= 2; k++) {
+          const ang = base + (k / 2) * half;
+          next.push({ x: best.x + Math.cos(ang) * clearance, y: best.y + Math.sin(ang) * clearance });
+        }
         next.push(p1);
         changed = true;
       } else {
@@ -139,15 +157,25 @@ export function initPoints(rs, ax, ay, bx, by, pegs, clearance) {
   rs.points = pts;
 }
 
-function restLen(ax, ay, bx, by, wrapLen) {
-  return Math.max(60, (wrapLen || Math.hypot(bx - ax, by - ay)) * 0.96);
+function restLen(ax, ay, bx, by, wrapLen, dragging) {
+  const direct = Math.hypot(bx - ax, by - ay);
+  if (dragging) {
+    // Spring/rubber-band while dragging: rest tracks a bit under current span so tension rises
+    return Math.max(60, direct * 0.92);
+  }
+  // Settled: heavy slack — rope is 1.5–1.65× longer than straight peg distance
+  const slack = 1.65;
+  const target = Math.max(80, direct * slack);
+  // Prefer wrapLen if it already has S-bends baked in
+  if (wrapLen && wrapLen > direct * 1.2) return Math.max(target, wrapLen * 0.98);
+  return target;
 }
 
 export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
   if (!rs.points || rs.clearing) return;
   const pts = rs.points;
   const n = pts.length;
-  const clearance = pegR + ropeHalf + 3;
+  const clearance = pegR + ropeHalf * 2.0 + 2; // arc radius ≥ rope diameter → no tube fold // keep centerline bend ≥ tube radius
 
   if (!rs._lastA) rs._lastA = { x: ax, y: ay };
   if (!rs._lastB) rs._lastB = { x: bx, y: by };
@@ -168,12 +196,13 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
 
   let curLen = 0;
   for (let i = 1; i < n; i++) curLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-  const totalRest = restLen(ax, ay, bx, by, curLen);
+  const totalRest = restLen(ax, ay, bx, by, curLen, rs._dragging);
   const segRest = totalRest / (n - 1);
   rs.stretch = Math.hypot(bx - ax, by - ay) / Math.max(1, totalRest);
 
-  const g = 40;
-  const damp = 0.9;
+  // Spring/rubber-band: lag + settle into S-curves when slack
+  const damp = 0.86;
+  const g = rs._dragging ? 40 : 55;
   for (let i = 1; i < n - 1; i++) {
     const p = pts[i];
     let vx = (p.x - p.ox) * damp;
@@ -182,13 +211,31 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
     p.x += vx;
     p.y += vy + g * dt * dt;
   }
+  // When settled with slack, gently bias midpoints into a soft S-bend (floor drape)
+  if (!rs._dragging && rs.wobble < 0.05) {
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+    const seed = (rs.id || 0) * 1.7;
+    for (let i = 1; i < n - 1; i++) {
+      const t = i / (n - 1);
+      const sCurve = Math.sin(t * Math.PI * 2 + seed) * Math.sin(t * Math.PI);
+      const amp = len * 0.18;
+      pts[i].x += nx * sCurve * amp * dt * 2.2;
+      pts[i].y += ny * sCurve * amp * dt * 2.2;
+    }
+  }
 
-  for (let it = 0; it < 12; it++) {
+  // Softer constraint iterations → stretchy spring feel; more iters on settle
+  const iters = (rs._dragging || rs.wobble > 0.15) ? 6 : 14;
+  for (let it = 0; it < iters; it++) {
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       let dx = b.x - a.x, dy = b.y - a.y;
       let d = Math.hypot(dx, dy) || 0.0001;
-      const corr = ((d - segRest) / d) * 0.48;
+      // Soft spring: allow stretch, pull back gradually
+      const stiffness = (rs._dragging) ? 0.28 : 0.52;
+      const corr = ((d - segRest) / d) * stiffness;
       if (i === 0) { b.x -= dx * corr; b.y -= dy * corr; }
       else if (i === n - 2) { a.x += dx * corr; a.y += dy * corr; }
       else {
@@ -227,5 +274,23 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
 }
 
 export function impulseWobble(rs, amount = 1) {
-  rs.wobble = Math.min(1.5, (rs.wobble || 0) + amount);
+  rs.wobble = Math.min(2.2, (rs.wobble || 0) + amount);
+}
+
+/** Kick mid-rope velocities for 1–2 damped body oscillations (cap stays pinned). */
+export function springKick(rs, strength = 1) {
+  if (!rs.points) return;
+  const pts = rs.points;
+  const n = pts.length;
+  for (let i = 1; i < n - 1; i++) {
+    const t = i / (n - 1);
+    const amp = Math.sin(t * Math.PI) * strength * 18;
+    // Lateral kick relative to current end vector
+    const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
+    const nx = -(by - ay), ny = (bx - ax);
+    const nl = Math.hypot(nx, ny) || 1;
+    pts[i].ox = pts[i].x - (nx / nl) * amp * 0.35;
+    pts[i].oy = pts[i].y - (ny / nl) * amp * 0.35;
+  }
+  rs.wobble = Math.min(2.2, (rs.wobble || 0) + strength * 0.85);
 }

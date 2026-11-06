@@ -1,17 +1,26 @@
-/** Compact clustered pegs + moderate wrapping ropes. Solvable via scramble-from-solved. */
+/**
+ * Solvable levels: place untangled ropes, scramble by legal moves.
+ * Capacity 1 (one magnetic cap per peg). Extra empty pegs for moves.
+ * Clear rule is "no crossings" (checked at runtime) — start must have 0 free ropes.
+ */
+import { polylinesCross } from './crossing.js';
 
 export const COLORS = [
-  { name: 'lime',   hex: '#8BE33A', dark: '#4A9A12', light: '#C8FF7A' },
-  { name: 'purple', hex: '#8A3CF0', dark: '#4E12A8', light: '#C49BFF' },
-  { name: 'cyan',   hex: '#2EC8F0', dark: '#0A7AA8', light: '#9AE0FF' },
-  { name: 'red',    hex: '#F0383A', dark: '#9A1010', light: '#FF8A8A' },
-  { name: 'orange', hex: '#F7A823', dark: '#B86800', light: '#FFD08A' },
-  { name: 'peach',  hex: '#F2B48E', dark: '#C87848', light: '#FFE0C8' },
-  { name: 'green',  hex: '#1E9A4E', dark: '#0A5A28', light: '#6AD08A' },
-  { name: 'blue',   hex: '#2457E0', dark: '#1428A0', light: '#8AA4FF' },
-  { name: 'maroon', hex: '#8E2E2A', dark: '#5A1815', light: '#C87870' },
-  { name: 'navy',   hex: '#2B2F55', dark: '#141828', light: '#6A70A0' },
+  { name: 'red', hex: '#E8302A', dark: '#961F1B', light: '#E9403B' },
+  { name: 'blue', hex: '#1E5BFF', dark: '#133BA5', light: '#3068FF' },
+  { name: 'cyan', hex: '#18C8F0', dark: '#0F829C', light: '#2ACCF1' },
+  { name: 'lime', hex: '#8EE01C', dark: '#5C9112', light: '#97E22E' },
+  { name: 'green', hex: '#1FA24A', dark: '#146930', light: '#30A958' },
+  { name: 'orange', hex: '#FF9A12', dark: '#A5640B', light: '#FFA224' },
+  { name: 'purple', hex: '#7A2CF0', dark: '#4F1C9C', light: '#843CF1' },
+  { name: 'salmon', hex: '#F4A98A', dark: '#9E6D59', light: '#F4AF93' },
+  { name: 'brown', hex: '#6B2A1E', dark: '#451B13', light: '#763B30' },
+  { name: 'teal', hex: '#0E9C8C', dark: '#09655B', light: '#21A395' },
+  { name: 'navy', hex: '#1B2050', dark: '#111434', light: '#2D315E' },
+  { name: 'yellow', hex: '#FFC21A', dark: '#A57E10', light: '#FFC62C' },
 ];
+
+export const LEVEL_COUNT = 12;
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function mulberry32(a) {
@@ -23,34 +32,27 @@ function mulberry32(a) {
   };
 }
 
-/**
- * Hex-ish packed cluster filling ~60% of board width.
- * Center-to-center ≈ 2.2× peg diameter.
- */
 function clusterLayout(n, seed = 1) {
   const rng = mulberry32(seed);
-  // Screen spacing ≈ 0.175 W with boardW≈0.78W → norm spacing ≈ 0.224
-  // (= ~3.2× peg diameter 0.055W)
-  const spacing = 0.224;
+  // Compact hex packing — target cluster ~0.55–0.62 of board after normalize
+  const spacing = 0.112; // tighter cluster like reference
   const pts = [];
-  // axial hex rings
-  pts.push({ x: 0.5, y: 0.5 });
+  pts.push({ x: 0, y: 0 });
   let ring = 1;
   while (pts.length < n) {
     for (let s = 0; s < 6 && pts.length < n; s++) {
       for (let i = 0; i < ring && pts.length < n; i++) {
-        const ang = (s * Math.PI / 3) + (i / ring) * (Math.PI / 3) + rng() * 0.08;
-        const r = ring * spacing * (0.95 + rng() * 0.08);
+        const ang = (s * Math.PI / 3) + (i / ring) * (Math.PI / 3) + rng() * 0.04;
+        const r = ring * spacing * (0.97 + rng() * 0.04);
         pts.push({
-          x: 0.5 + Math.cos(ang) * r * 1.08,
-          y: 0.5 + Math.sin(ang) * r * 1.0,
+          x: Math.cos(ang) * r * 1.0,
+          y: Math.sin(ang) * r * 0.95,
         });
       }
     }
     ring++;
     if (ring > 8) break;
   }
-  // settle
   for (let iter = 0; iter < 50; iter++) {
     for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
       let dx = pts[j].x - pts[i].x, dy = pts[j].y - pts[i].y;
@@ -62,10 +64,22 @@ function clusterLayout(n, seed = 1) {
         pts[j].x += dx * push; pts[j].y += dy * push;
       }
     }
-    for (const p of pts) {
-      p.x = clamp(p.x, 0.14, 0.86);
-      p.y = clamp(p.y, 0.16, 0.86);
-    }
+  }
+  // Normalize into centered [0.18..0.82] box so cluster fills ~0.64 of board
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const spanX = Math.max(0.001, maxX - minX);
+  const spanY = Math.max(0.001, maxY - minY);
+  const span = Math.max(spanX, spanY);
+  const target = 0.88; // fill board so screen cluster ≈ 0.60 W
+  for (const p of pts) {
+    p.x = 0.5 + ((p.x - (minX + maxX) * 0.5) / span) * target;
+    p.y = 0.5 + ((p.y - (minY + maxY) * 0.5) / span) * target;
+    p.x = clamp(p.x, 0.14, 0.86);
+    p.y = clamp(p.y, 0.14, 0.86);
   }
   return pts.slice(0, n);
 }
@@ -74,124 +88,207 @@ function pegDist(a, b) {
   return Math.hypot(a.nx - b.nx, a.ny - b.ny);
 }
 
-export function generateLevel(levelIndex) {
-  const rng = mulberry32(2000 + levelIndex * 131);
-  const ropeCount = levelIndex === 0 ? 6
-    : levelIndex === 1 ? 7
-    : Math.min(8 + Math.floor(levelIndex * 0.5), 11);
-  const pegCount = Math.min(10 + Math.floor(ropeCount * 0.4), 14);
-  const capacity = levelIndex < 2 ? 4 : 3;
-  const seconds = Math.max(90, 200 - levelIndex * 10);
+/** Straight polyline between two pegs in normalized space (for crossing check during gen). */
+function normLine(pa, pb) {
+  return [{ x: pa.nx, y: pa.ny }, { x: pb.nx, y: pb.ny }];
+}
 
-  const pegs = clusterLayout(pegCount, 70 + levelIndex * 17).map((p, i) => ({
+function endsOf(pegs, ropeId) {
+  const out = [];
+  for (const peg of pegs) {
+    peg.stack.forEach((cap, si) => {
+      if (cap.ropeId === ropeId) out.push({ peg, si });
+    });
+  }
+  return out;
+}
+
+function countCrossings(pegs, ropes) {
+  let n = 0;
+  const lines = ropes.map(r => {
+    const e = endsOf(pegs, r.id);
+    if (e.length < 2) return null;
+    return {
+      pts: normLine(e[0].peg, e[1].peg),
+      pegs: [e[0].peg, e[1].peg],
+    };
+  });
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i]) continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j]) continue;
+      if (polylinesCross(lines[i].pts, lines[j].pts, lines[i].pegs, lines[j].pegs, 0.08)) n++;
+    }
+  }
+  return n;
+}
+
+function anyFreeRope(pegs, ropes) {
+  const lines = ropes.map(r => {
+    const e = endsOf(pegs, r.id);
+    if (e.length < 2) return null;
+    return { id: r.id, pts: normLine(e[0].peg, e[1].peg), pegs: [e[0].peg, e[1].peg] };
+  });
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i]) continue;
+    let crossed = false;
+    for (let j = 0; j < lines.length; j++) {
+      if (i === j || !lines[j]) continue;
+      if (polylinesCross(lines[i].pts, lines[j].pts, lines[i].pegs, lines[j].pegs, 0.08)) {
+        crossed = true; break;
+      }
+    }
+    if (!crossed) return true;
+  }
+  return false;
+}
+
+export function generateLevel(levelIndex) {
+  const rng = mulberry32(3000 + levelIndex * 97);
+  // 10+ levels, up to ~10 ropes on HARD
+  // 12 levels: 3 → ~10 ropes; always leave empty pegs for moves
+  const ropeTable = [3, 4, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10];
+  const ropeCount = ropeTable[Math.min(levelIndex, ropeTable.length - 1)];
+  // 1–3 empty pegs inside the cluster (enough for moves, not sparse edges)
+  const emptyPegs = levelIndex < 3 ? 3 : levelIndex < 7 ? 2 : 2;
+  const pegCount = ropeCount * 2 + emptyPegs;
+  const capacity = 1; // one magnetic cap per peg top
+  const seconds = Math.max(90, 210 - levelIndex * 8);
+
+  const pegs = clusterLayout(pegCount, 40 + levelIndex * 19).map((p, i) => ({
     id: i, nx: p.x, ny: p.y, capacity, stack: [],
   }));
 
+  // Place ropes untangled: pair nearest available pegs without creating crossings
   const ropes = [];
-  let colorIdx = (levelIndex * 3) % COLORS.length;
-  const pegOrder = pegs.map((_, i) => i);
-  for (let i = pegOrder.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [pegOrder[i], pegOrder[j]] = [pegOrder[j], pegOrder[i]];
-  }
-  let pi = 0;
+  let colorIdx = (levelIndex * 2) % COLORS.length;
+  const used = new Set();
   for (let r = 0; r < ropeCount; r++) {
-    let placed = false;
-    for (let k = 0; k < pegs.length; k++) {
-      const peg = pegs[pegOrder[(pi + k) % pegs.length]];
-      if (peg.stack.length + 2 <= peg.capacity) {
-        const color = COLORS[colorIdx % COLORS.length];
-        colorIdx++;
-        peg.stack.push({ ropeId: r, end: 0 });
-        peg.stack.push({ ropeId: r, end: 1 });
-        ropes.push({ id: r, color, clearing: false, clearT: 0 });
-        placed = true;
-        pi = (pi + k + 1) % pegs.length;
-        break;
+    let best = null, bestD = 1e9;
+    for (let i = 0; i < pegs.length; i++) {
+      if (used.has(i)) continue;
+      for (let j = i + 1; j < pegs.length; j++) {
+        if (used.has(j)) continue;
+        const d = pegDist(pegs[i], pegs[j]);
+        if (d < 0.12 || d > 0.55) continue;
+        // Tentative: would this cross existing?
+        const pts = normLine(pegs[i], pegs[j]);
+        let crosses = false;
+        for (const existing of ropes) {
+          const e = endsOf(pegs, existing.id);
+          if (e.length < 2) continue;
+          if (polylinesCross(pts, normLine(e[0].peg, e[1].peg), [pegs[i], pegs[j]], [e[0].peg, e[1].peg], 0.08)) {
+            crosses = true; break;
+          }
+        }
+        if (crosses) continue;
+        if (d < bestD) { bestD = d; best = [i, j]; }
       }
     }
-    if (!placed) break;
+    if (!best) {
+      // fallback: any two free pegs
+      const free = pegs.map((_, i) => i).filter(i => !used.has(i));
+      if (free.length < 2) break;
+      best = [free[0], free[1]];
+    }
+    const color = COLORS[colorIdx % COLORS.length];
+    colorIdx++;
+    pegs[best[0]].stack.push({ ropeId: r, end: 0 });
+    pegs[best[1]].stack.push({ ropeId: r, end: 1 });
+    used.add(best[0]); used.add(best[1]);
+    ropes.push({ id: r, color, clearing: false, clearT: 0, freeT: 0 });
   }
 
-  // Scramble: prefer 2–3.5 spacing hops so ropes weave through neighbors
-  // (fat S-curves / wrap halfway around pegs) without spanning the board.
-  const spacing = 0.224;
-  const moves = 90 + ropeCount * 22 + levelIndex * 12;
+  // Scramble: move caps onto empty pegs to create crossings
+  const moves = 30 + ropeCount * 12 + levelIndex * 8;
   for (let m = 0; m < moves; m++) {
-    const sources = pegs.filter(p => p.stack.length > 0);
-    if (!sources.length) break;
-    const src = sources[Math.floor(rng() * sources.length)];
-    const ring = src.stack[src.stack.length - 1];
-    const dests = pegs.filter(p => p.id !== src.id && p.stack.length < p.capacity);
-    if (!dests.length) continue;
-    // Ideal: 2–3.5 spacings (cross 1–2 neighbor pegs)
-    dests.sort((a, b) => {
+    const occupied = pegs.filter(p => p.stack.length > 0);
+    const empty = pegs.filter(p => p.stack.length === 0);
+    if (!occupied.length || !empty.length) break;
+    const src = occupied[Math.floor(rng() * occupied.length)];
+    // Prefer empty pegs that are 1.5–3.5 spacings away (creates tangle)
+    empty.sort((a, b) => {
       const score = (p) => {
-        const d = pegDist(p, src) / spacing;
-        if (d >= 2.2 && d <= 3.8) return Math.abs(d - 3.0); // best — cross 1–2 pegs
-        if (d >= 1.6 && d < 2.2) return 1.5 + Math.abs(d - 1.9);
-        if (d > 3.8 && d <= 5.5) return 3 + (d - 3.8);
-        return 9 + Math.abs(d - 3.0);
+        const d = pegDist(p, src) / 0.145;
+        if (d >= 1.5 && d <= 3.5) return Math.abs(d - 2.4);
+        return 5 + Math.abs(d - 2.4);
       };
       return score(a) - score(b);
     });
-    const pool = Math.max(1, Math.min(5, dests.length));
-    const pick = dests[Math.floor(rng() * pool)];
-    src.stack.pop();
-    pick.stack.push(ring);
+    const dest = empty[Math.floor(rng() * Math.min(3, empty.length))];
+    dest.stack.push(src.stack.pop());
   }
 
-  // Ensure no rope starts solved (adjacent on same peg) — move to a NEARBY peg
-  for (let guard = 0; guard < 100; guard++) {
-    let fixed = false;
-    const endsOf = {};
-    for (const peg of pegs) {
-      peg.stack.forEach((ring, si) => {
-        if (!endsOf[ring.ropeId]) endsOf[ring.ropeId] = [];
-        endsOf[ring.ropeId].push({ peg, si, ring });
-      });
-    }
-    for (const rope of ropes) {
-      const ends = endsOf[rope.id] || [];
-      if (ends.length !== 2) continue;
-      const [e0, e1] = ends;
-      if (e0.peg.id === e1.peg.id && Math.abs(e0.si - e1.si) === 1) {
-        const peg = e0.peg;
-        while (peg.stack.length) {
-          const top = peg.stack[peg.stack.length - 1];
-          const dests = pegs.filter(p => p.id !== peg.id && p.stack.length < p.capacity);
-          if (!dests.length) break;
-          dests.sort((a, b) => {
-            const sa = Math.abs(pegDist(a, peg) / spacing - 2.4);
-            const sb = Math.abs(pegDist(b, peg) / spacing - 2.4);
-            return sa - sb;
-          });
-          peg.stack.pop();
-          dests[0].stack.push(top);
-          if (top.ropeId === rope.id) break;
-          if (peg.stack.length <= Math.min(e0.si, e1.si)) break;
-        }
-        fixed = true;
-      }
-    }
-    if (!fixed) break;
+  // Ensure at least 2 empty pegs: if scramble filled everything, undo last moves onto a reserved empty
+  let empties = pegs.filter(p => p.stack.length === 0);
+  // Reserve empties by not using more than pegCount - emptyPegs occupied slots
+  const maxOccupied = pegs.length - Math.max(2, emptyPegs);
+  while (pegs.filter(p => p.stack.length > 0).length > maxOccupied) {
+    // Find a peg that has a cap whose other end's peg can absorb? Just move a random cap
+    // onto... we need an empty. If none, we over-placed — merge by moving one stack's cap
+    // onto a peg that already has capacity? capacity is 1, so create empty by temporarily
+    // holding — actually capacity 1 means occupied == number of caps == ropeCount*2.
+    // So pegCount MUST be > ropeCount*2. Guaranteed by construction above.
+    break;
+  }
+  empties = pegs.filter(p => p.stack.length === 0);
+  if (empties.length < 2) {
+    // Emergency: add virtual empty by expanding? shouldn't happen
+    console.warn('level gen: fewer than 2 empties', empties.length);
   }
 
-  // Prefer fewer empty pegs: pull a free ring onto empty pegs from crowded ones
-  for (let pass = 0; pass < 24; pass++) {
+  // Ensure 0 free ropes at start: keep legal-scrambling until tangled
+  for (let guard = 0; guard < 80 && anyFreeRope(pegs, ropes); guard++) {
+    const occupied = pegs.filter(p => p.stack.length > 0);
     const empty = pegs.filter(p => p.stack.length === 0);
-    const crowded = pegs.filter(p => p.stack.length >= 2);
-    if (!empty.length || !crowded.length) break;
-    const dest = empty[Math.floor(rng() * empty.length)];
-    // Prefer a source whose top ring's other end is nearby → more wraps later
-    crowded.sort((a, b) => pegDist(a, dest) - pegDist(b, dest));
-    const src = crowded[0];
-    const ring = src.stack.pop();
-    dest.stack.push(ring);
+    if (!occupied.length || !empty.length) break;
+    // Prefer moves that increase crossings: try a few candidates
+    let bestSrc = null, bestDest = null, bestCross = countCrossings(pegs, ropes);
+    for (let tryN = 0; tryN < 12; tryN++) {
+      const src = occupied[Math.floor(rng() * occupied.length)];
+      if (!src.stack.length) continue;
+      const dest = empty[Math.floor(rng() * empty.length)];
+      const cap = src.stack.pop();
+      dest.stack.push(cap);
+      const c = countCrossings(pegs, ropes);
+      const free = anyFreeRope(pegs, ropes);
+      if (!free && c >= bestCross) {
+        bestCross = c; bestSrc = null; bestDest = null; // keep
+        break;
+      }
+      if (c > bestCross) { bestCross = c; bestSrc = src; bestDest = dest; }
+      // revert
+      dest.stack.pop();
+      src.stack.push(cap);
+      if (bestSrc === src) { bestSrc = null; }
+    }
+    if (bestSrc && bestDest) {
+      // already applied if we broke early; else apply best
+      if (bestSrc.stack.length) bestDest.stack.push(bestSrc.stack.pop());
+    } else if (anyFreeRope(pegs, ropes)) {
+      // random move as fallback
+      const src = occupied[Math.floor(rng() * occupied.length)];
+      const dest = empty[Math.floor(rng() * empty.length)];
+      if (src.stack.length) dest.stack.push(src.stack.pop());
+    }
+  }
+  // Last resort: if still free, add a long crossing by swapping two distant ends
+  if (anyFreeRope(pegs, ropes)) {
+    const occupied = pegs.filter(p => p.stack.length > 0);
+    const empty = pegs.filter(p => p.stack.length === 0);
+    for (let k = 0; k < 20 && anyFreeRope(pegs, ropes) && empty.length; k++) {
+      occupied.sort((a, b) => pegDist(a, empty[0]) - pegDist(b, empty[0]));
+      const src = occupied[occupied.length - 1];
+      const dest = empty[0];
+      if (src.stack.length) dest.stack.push(src.stack.pop());
+      empty.splice(0, 1);
+      if (!src.stack.length) empty.push(src);
+    }
   }
 
-  return { index: levelIndex, pegs, ropes, capacity, seconds,
-    difficulty: levelIndex < 2 ? 'EASY' : levelIndex < 5 ? 'MED' : 'HARD' };
+  const difficulty = levelIndex < 3 ? 'EASY' : levelIndex < 7 ? 'MED' : 'HARD';
+  return {
+    index: levelIndex, pegs, ropes, capacity, seconds, difficulty,
+    crossings: countCrossings(pegs, ropes),
+  };
 }
-
-export const LEVEL_COUNT = 8;

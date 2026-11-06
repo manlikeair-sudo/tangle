@@ -4,12 +4,14 @@ export class Particles {
   burst(x, y, color, n = 22) {
     for (let i = 0; i < n; i++) {
       const ang = (i / n) * Math.PI * 2 + Math.random() * 0.2;
-      const sp = 90 + Math.random() * 220;
+      const sp = 110 + Math.random() * 260;
       const p = this._pool.pop() || {};
-      p.x = x; p.y = y; p.vx = Math.cos(ang) * sp; p.vy = Math.sin(ang) * sp - 50;
-      p.life = 0.5 + Math.random() * 0.25; p.age = 0;
-      p.color = color.hex; p.kind = Math.random() < 0.55 ? '+' : '*';
-      p.size = 12 + Math.random() * 12; p.rot = Math.random() * Math.PI;
+      p.x = x; p.y = y; p.vx = Math.cos(ang) * sp; p.vy = Math.sin(ang) * sp - 60;
+      p.life = 0.45 + Math.random() * 0.3; p.age = 0;
+      // Mostly white sparkles with a few rope-colored flashes
+      p.color = Math.random() < 0.7 ? '#FFFFFF' : (color?.hex || '#fff');
+      p.kind = Math.random() < 0.4 ? '+' : '*';
+      p.size = 10 + Math.random() * 16; p.rot = Math.random() * Math.PI;
       this.list.push(p);
     }
   }
