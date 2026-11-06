@@ -30,21 +30,23 @@ let winShown = false;
 let audioGestureBound = false;
 
 let PEG_R = 28, CAP_R = 34, ROPE_W = 28, SNAP_DIST = 56;
-// Magnet sticky zone ≈ 1.5 peg radii (screen space)
-let MAGNET_ZONE = 50;
+// Optional gentle peg assist when releasing very near an empty peg
+let PEG_ASSIST_R = 50;
 const FREE_DELAY = 0.5;
 const RETRACT_DUR = 0.2;
-const SNAP_DUR = 0.07; // 70 ms ease-in into peg
-const FLYBACK_DUR = 0.18;
+const SNAP_DUR = 0.07; // 70 ms ease-in snap to floor/peg
 const LIFT_DUR = 0.08; // magnetic pop lift
-const FINGER_OFFSET_Y = -36; // keep cap above finger
+const FOLLOW = 0.92; // nearly 1:1 pointer tracking (tiny soften only)
+const MAX_STRETCH = 1.9; // rubber-band max vs rest length; beyond = spring resist
+const CAP_SEP_MUL = 2.15; // min center distance between caps ≈ 2.15× CAP_R
+const EDGE_PAD = 18; // keep caps inside visible play area
 
 function updateScale() {
   PEG_R = W * 0.055 * 0.5;
   ROPE_W = W * 0.060;
   CAP_R = W * 0.067 * 0.5;
   SNAP_DIST = PEG_R * 2.2;
-  MAGNET_ZONE = PEG_R * 1.5 * 2; // diameter-ish radius in screen px ≈ 1.5 peg radii from center
+  PEG_ASSIST_R = PEG_R * 1.35; // gentle optional snap only when this close to empty peg
 }
 
 function resize() {
@@ -139,11 +141,26 @@ function loadLevel(idx) {
 
 function syncRopeEndsFromStacks() {
   for (const rs of ropeStates) {
+    const prev = rs._ends || [null, null];
     const found = [null, null];
     for (const peg of pegs) {
       peg.stack.forEach((cap, si) => {
         if (cap.ropeId === rs.id) found[cap.end] = { pegId: peg.id, stackIndex: si };
       });
+    }
+    for (let e = 0; e < 2; e++) {
+      if (found[e]) continue;
+      const p = prev[e];
+      if (p && p.pegId < 0 && p.x != null) {
+        found[e] = { pegId: -1, x: p.x, y: p.y };
+      } else if (p && p.pegId >= 0 && pegs[p.pegId]) {
+        // Just detached from this peg — park at peg coords as floor until placed
+        found[e] = { pegId: -1, x: pegs[p.pegId].x, y: pegs[p.pegId].y };
+      } else if (p && p.x != null) {
+        found[e] = { pegId: -1, x: p.x, y: p.y };
+      } else {
+        found[e] = { pegId: -1, x: boardOX + boardW * 0.5, y: boardOY + boardH * 0.5 };
+      }
     }
     rs._ends = found;
   }
@@ -163,31 +180,38 @@ function endPositions(ropeId) {
   const out = [];
   for (let e = 0; e < 2; e++) {
     if (dragging && dragging.ropeId === ropeId && dragging.end === e) {
-      out.push({ x: dragging.x, y: dragging.y, pegId: -1, stackIndex: -1, lifted: true });
+      out.push({ x: dragging.x, y: dragging.y, pegId: -1, stackIndex: -1, lifted: true, onFloor: true });
       continue;
     }
     const anim = snapAnims.find(a => a.ropeId === ropeId && a.end === e);
     if (anim) {
       const u = Math.min(1, anim.t / anim.dur);
-      let t;
-      if (anim.kind === 'snap') t = easeInCubic(u); // accelerate into peg
-      else if (anim.kind === 'flyback') t = easeOutCubic(u);
-      else t = easeOutQuad(u);
+      const t = anim.kind === 'snap' ? easeInCubic(u) : easeOutQuad(u);
       out.push({
         x: anim.from.x + (anim.to.x - anim.from.x) * t,
         y: anim.from.y + (anim.to.y - anim.from.y) * t,
         pegId: anim.pegId, stackIndex: -1, snapping: true, squash: anim.squash,
+        onFloor: anim.onFloor !== false && !(anim.pegId >= 0),
         liftY: anim.liftY ? anim.liftY * (1 - t) : 0,
       });
       continue;
     }
     const info = rs._ends[e];
-    if (!info || info.pegId < 0) { out.push({ x: 0, y: 0 }); continue; }
-    const peg = pegs[info.pegId];
-    out.push({
-      x: peg.x, y: peg.y,
-      pegId: peg.id, stackIndex: info.stackIndex,
-    });
+    if (!info) { out.push({ x: 0, y: 0, onFloor: true }); continue; }
+    if (info.pegId >= 0 && pegs[info.pegId]) {
+      const peg = pegs[info.pegId];
+      out.push({
+        x: peg.x, y: peg.y,
+        pegId: peg.id, stackIndex: info.stackIndex,
+        onFloor: false,
+      });
+    } else {
+      out.push({
+        x: info.x, y: info.y,
+        pegId: -1, stackIndex: -1,
+        onFloor: true,
+      });
+    }
   }
   return out;
 }
@@ -217,13 +241,36 @@ function emptyPegNear(x, y, maxDist) {
   return best;
 }
 
-/** Pointer pick: nearest grabbable cap by projected screen distance, radius ≈ 1.3× on-screen. */
+/** Pointer pick: nearest grabbable cap (peg-top or free-floor) by projected screen distance. */
 function findGrabbable(clientX, clientY) {
   const capR = scene.capScreenRadius();
-  const hitR = capR * 1.3;
+  const hitR = capR * 1.35;
   let best = null, bestD = hitR;
+  const floorY = scene.floorCapY();
+  const pegY = scene.pegH + scene.capH * 0.5;
+
+  // Free-floor caps
+  for (const rs of ropeStates) {
+    if (rs.clearing || !rs._ends) continue;
+    for (let e = 0; e < 2; e++) {
+      const info = rs._ends[e];
+      if (!info || info.pegId >= 0) continue;
+      if (snapAnims.some(a => a.ropeId === rs.id && a.end === e)) continue;
+      const scr = scene.projectBoardAt(info.x, info.y, floorY);
+      const d = Math.hypot(scr.x - clientX, scr.y - clientY);
+      if (d < bestD) {
+        bestD = d;
+        best = {
+          peg: null, cap: { ropeId: rs.id, end: e },
+          ropeId: rs.id, end: e, screen: scr,
+          fromFloor: true, originX: info.x, originY: info.y,
+        };
+      }
+    }
+  }
+
+  // Peg-top caps (capacity 1 → stack top)
   for (const peg of pegs) {
-    // Any cap can be grabbed unless another cap covers it (capacity 1 → stack top only)
     const top = topCapAt(peg);
     if (!top) continue;
     const rs = ropeStates.find(r => r.id === top.ropeId);
@@ -232,10 +279,100 @@ function findGrabbable(clientX, clientY) {
     const d = Math.hypot(scr.x - clientX, scr.y - clientY);
     if (d < bestD) {
       bestD = d;
-      best = { peg, cap: top, ropeId: top.ropeId, end: top.end, screen: scr };
+      best = {
+        peg, cap: top, ropeId: top.ropeId, end: top.end, screen: scr,
+        fromFloor: false, originX: peg.x, originY: peg.y,
+      };
     }
   }
   return best;
+}
+
+function playAreaBounds() {
+  const hudReserve = Math.max(W > H ? 70 : 110, (W > H ? H * 0.095 : H * 0.12));
+  return {
+    minX: EDGE_PAD + CAP_R,
+    maxX: W - EDGE_PAD - CAP_R,
+    minY: hudReserve + EDGE_PAD + CAP_R,
+    maxY: H - EDGE_PAD - CAP_R,
+  };
+}
+
+function clampToPlayArea(x, y) {
+  const b = playAreaBounds();
+  return {
+    x: Math.max(b.minX, Math.min(b.maxX, x)),
+    y: Math.max(b.minY, Math.min(b.maxY, y)),
+  };
+}
+
+/** Other settled cap centers (exclude one rope end). */
+function otherCapCenters(excludeRopeId, excludeEnd) {
+  const out = [];
+  for (const rs of ropeStates) {
+    if (rs.clearing || !rs._ends) continue;
+    for (let e = 0; e < 2; e++) {
+      if (rs.id === excludeRopeId && e === excludeEnd) continue;
+      if (dragging && dragging.ropeId === rs.id && dragging.end === e) continue;
+      if (snapAnims.some(a => a.ropeId === rs.id && a.end === e)) continue;
+      const ends = endPositions(rs.id);
+      if (!ends) continue;
+      out.push({ x: ends[e].x, y: ends[e].y });
+    }
+  }
+  return out;
+}
+
+function resolveCapOverlap(x, y, excludeRopeId, excludeEnd) {
+  const minD = CAP_R * CAP_SEP_MUL;
+  let px = x, py = y;
+  for (let iter = 0; iter < 10; iter++) {
+    let moved = false;
+    for (const o of otherCapCenters(excludeRopeId, excludeEnd)) {
+      let dx = px - o.x, dy = py - o.y;
+      let d = Math.hypot(dx, dy);
+      if (d < 1e-4) { dx = 1; dy = 0; d = 1; }
+      if (d < minD) {
+        const push = (minD - d) + 0.5;
+        px += (dx / d) * push;
+        py += (dy / d) * push;
+        moved = true;
+      }
+    }
+    const c = clampToPlayArea(px, py);
+    px = c.x; py = c.y;
+    if (!moved) break;
+  }
+  return { x: px, y: py };
+}
+
+/** Raycast pointer → board plane at current drag lift (1:1 tracking). */
+function pointerToBoard(clientX, clientY, lifted) {
+  const liftEase = lifted ? 1 : 0;
+  const planeY = lifted
+    ? (scene.pegH + scene.capH + 0.15 + 0.55)
+    : scene.floorCapY();
+  return scene.screenToBoard(clientX, clientY, planeY);
+}
+
+function restLengthForRope(rs) {
+  if (rs && rs._restLen) return rs._restLen;
+  const ends = endPositions(rs.id);
+  if (!ends) return 200;
+  const d = Math.hypot(ends[0].x - ends[1].x, ends[0].y - ends[1].y);
+  return Math.max(80, d * 1.55);
+}
+
+function applyMaxStretch(x, y, otherX, otherY, restLen) {
+  const maxD = Math.max(restLen * MAX_STRETCH, 120);
+  const dx = x - otherX, dy = y - otherY;
+  const d = Math.hypot(dx, dy);
+  if (d <= maxD || d < 1e-4) return { x, y, stretched: d / Math.max(1, restLen) };
+  // Soft spring beyond max: allow a little extra with strong resistance
+  const excess = d - maxD;
+  const allowed = maxD + excess * 0.18;
+  const s = allowed / d;
+  return { x: otherX + dx * s, y: otherY + dy * s, stretched: allowed / Math.max(1, restLen) };
 }
 
 function haptic(ms = 8) {
@@ -274,29 +411,41 @@ function onDown(e) {
   const { x, y } = pointerPos(e);
   const g = findGrabbable(x, y);
   if (!g) return;
-  g.peg.stack.pop();
-  syncRopeEndsFromStacks();
-  // Target under finger with upward offset so finger doesn't hide cap
-  const targetX = x;
-  const targetY = y + FINGER_OFFSET_Y;
+
+  if (g.peg) {
+    g.peg.stack.pop();
+    syncRopeEndsFromStacks();
+  } else {
+    // Detach free-floor end
+    const rs0 = ropeStates.find(r => r.id === g.ropeId);
+    if (rs0 && rs0._ends) rs0._ends[g.end] = { pegId: -1, x: g.originX, y: g.originY };
+  }
+
+  const board = pointerToBoard(x, y, true);
   dragging = {
     ropeId: g.ropeId, end: g.end,
-    x: g.peg.x, y: g.peg.y,
-    // Visual lag targets
-    tx: targetX, ty: targetY,
-    fromPeg: g.peg.id,
-    originX: g.peg.x, originY: g.peg.y,
+    x: g.originX, y: g.originY,
+    tx: board.x, ty: board.y,
+    fromPeg: g.peg ? g.peg.id : -1,
+    originX: g.originX, originY: g.originY,
     liftT: 0,
     stickyPeg: null,
     pointerId: e.pointerId,
+    clientX: x, clientY: y,
   };
   const rs = ropeStates.find(r => r.id === g.ropeId);
   if (rs) {
     rs.z = Math.max(...ropeStates.map(r => r.z || 0)) + 1;
     rs._dragging = true;
     rs.freeT = 0;
+    // Capture rest length at grab for stretch limit
+    const ends = endPositions(rs.id);
+    if (ends) {
+      const other = ends[1 - g.end];
+      rs._restLen = Math.max(80, Math.hypot(g.originX - other.x, g.originY - other.y) * 1.55);
+    }
   }
-  audio.pop(); // soft magnetic pop on lift
+  audio.pop();
   audio.pickup();
   haptic(6);
 }
@@ -306,40 +455,52 @@ function onMove(e) {
   if (!dragging) return;
   if (e.pointerId != null && dragging.pointerId != null && e.pointerId !== dragging.pointerId) return;
   const { x, y } = pointerPos(e);
-  dragging.tx = x;
-  dragging.ty = y + FINGER_OFFSET_Y;
+  dragging.clientX = x;
+  dragging.clientY = y;
+  const board = pointerToBoard(x, y, true);
+  dragging.tx = board.x;
+  dragging.ty = board.y;
 }
 
 function onUp(e) {
   e.preventDefault();
-  audio.unlock(); // critical: unlock path on first touchend/pointerup in game
+  audio.unlock();
   if (!dragging) return;
   if (e.pointerId != null && dragging.pointerId != null && e.pointerId !== dragging.pointerId) return;
 
-  // Prefer sticky peg if magnet zone engaged, else nearest empty
-  let peg = dragging.stickyPeg;
-  if (!peg) peg = emptyPegNear(dragging.x, dragging.y, SNAP_DIST * 1.4);
-  let valid = !!(peg && peg.stack.length < peg.capacity);
-  if (!valid) {
-    peg = pegs[dragging.fromPeg];
-    if (!peg || peg.stack.length >= peg.capacity) {
-      peg = pegs.find(p => p.stack.length < p.capacity) || pegs[0];
-    }
-  }
-  const target = { x: peg.x, y: peg.y };
   const rs = ropeStates.find(r => r.id === dragging.ropeId);
   if (rs) rs._dragging = false;
+
+  // Free placement: snap to release spot on the floor (optional gentle peg assist)
+  let tx = dragging.x, ty = dragging.y;
+  let peg = emptyPegNear(tx, ty, PEG_ASSIST_R);
+  let onFloor = true;
+  let pegId = -1;
+  if (peg && peg.stack.length < peg.capacity) {
+    // Gentle optional pull onto empty peg when released very near it
+    tx = peg.x; ty = peg.y;
+    onFloor = false;
+    pegId = peg.id;
+  } else {
+    peg = null;
+    const clamped = clampToPlayArea(tx, ty);
+    const resolved = resolveCapOverlap(clamped.x, clamped.y, dragging.ropeId, dragging.end);
+    tx = resolved.x; ty = resolved.y;
+  }
 
   snapAnims.push({
     ropeId: dragging.ropeId, end: dragging.end,
     from: { x: dragging.x, y: dragging.y },
-    to: { x: target.x, y: target.y },
+    to: { x: tx, y: ty },
     t: 0,
-    dur: valid ? SNAP_DUR : FLYBACK_DUR,
-    pegId: peg.id, squash: 1,
+    dur: SNAP_DUR,
+    pegId,
+    squash: 1,
     pendingCap: { ropeId: dragging.ropeId, end: dragging.end },
-    kind: valid ? 'snap' : 'flyback',
-    liftY: valid ? 0 : 0.3,
+    kind: 'snap',
+    onFloor,
+    floorX: tx, floorY: ty,
+    liftY: 0,
     punched: false,
   });
   dragging = null;
@@ -355,24 +516,27 @@ window.addEventListener('pointercancel', onUp);
 window.addEventListener('touchend', (e) => { audio.unlock(); }, { passive: true });
 
 function finishSnap(anim) {
-  const peg = pegs[anim.pegId];
-  peg.stack.push(anim.pendingCap);
-  syncRopeEndsFromStacks();
   const rs = ropeStates.find(r => r.id === anim.ropeId);
-  if (rs) {
-    // Body oscillations only — cap is pinned on peg
-    springKick(rs, anim.kind === 'snap' ? 1.1 : 0.75);
-    impulseWobble(rs, anim.kind === 'snap' ? 0.9 : 0.6);
-  }
-  if (anim.kind === 'snap') {
-    audio.snap();
-    haptic(12);
-    // Tiny peg dip
+  if (anim.pegId >= 0 && pegs[anim.pegId]) {
+    const peg = pegs[anim.pegId];
+    // Ensure not already stacked
+    peg.stack = peg.stack.filter(c => !(c.ropeId === anim.pendingCap.ropeId && c.end === anim.pendingCap.end));
+    peg.stack.push(anim.pendingCap);
+    syncRopeEndsFromStacks();
     pegDips.push({ pegId: peg.id, t: 0, dur: 0.12, amp: 0.04 });
   } else {
-    audio.snap();
-    haptic(8);
+    // Free floor placement
+    if (rs) {
+      if (!rs._ends) rs._ends = [null, null];
+      rs._ends[anim.end] = { pegId: -1, x: anim.floorX, y: anim.floorY };
+    }
   }
+  if (rs) {
+    springKick(rs, 1.05);
+    impulseWobble(rs, 0.85);
+  }
+  audio.snap();
+  haptic(12);
   evaluateFrees();
 }
 
@@ -470,25 +634,31 @@ function tick(ts) {
     updateTimerHud();
   }
 
-  // Drag: lag behind finger (spring catch-up) + magnet sticky assist
+  // Drag: near-1:1 finger tracking in floor-plane coords + rubber-band max stretch
   if (dragging) {
     dragging.liftT = Math.min(1, dragging.liftT + dt / LIFT_DUR);
-    // Soft follow — rope/cap lag then catch up
-    const follow = 0.38; // lower = more spring lag
-    dragging.x += (dragging.tx - dragging.x) * follow;
-    dragging.y += (dragging.ty - dragging.y) * follow;
+    // Tiny soften only — mostly 1:1 with pointer raycast target
+    dragging.x += (dragging.tx - dragging.x) * FOLLOW;
+    dragging.y += (dragging.ty - dragging.y) * FOLLOW;
 
-    // Magnetic sticky zone: pull toward empty peg within ~1.5 peg radii
-    const near = emptyPegNear(dragging.x, dragging.y, MAGNET_ZONE);
-    dragging.stickyPeg = near;
-    if (near) {
-      const pull = 0.22; // sticky assist strength
-      dragging.x += (near.x - dragging.x) * pull;
-      dragging.y += (near.y - dragging.y) * pull;
-      // Also bias the finger target slightly so release feels locked
-      dragging.tx += (near.x - dragging.tx) * 0.08;
-      dragging.ty += (near.y - dragging.ty) * 0.08;
+    // Rubber-band stretch limit vs the other end
+    const rsDrag = ropeStates.find(r => r.id === dragging.ropeId);
+    const endsNow = endPositions(dragging.ropeId);
+    if (endsNow && rsDrag) {
+      const other = endsNow[1 - dragging.end];
+      const rest = rsDrag._restLen || restLengthForRope(rsDrag);
+      const lim = applyMaxStretch(dragging.x, dragging.y, other.x, other.y, rest);
+      dragging.x = lim.x;
+      dragging.y = lim.y;
+      rsDrag.stretch = lim.stretched;
     }
+
+    // Soft clamp while dragging (still allow near edges)
+    const c = clampToPlayArea(dragging.x, dragging.y);
+    dragging.x = c.x; dragging.y = c.y;
+
+    // Optional highlight when very near an empty peg (no force-pull while dragging)
+    dragging.stickyPeg = emptyPegNear(dragging.x, dragging.y, PEG_ASSIST_R);
   }
 
   // Snap animations
@@ -606,23 +776,20 @@ function tick(ts) {
     if (flying) {
       const rs = ropeStates.find(r => r.id === flying.ropeId);
       const u = Math.min(1, flying.t / flying.dur);
-      const t = flying.kind === 'snap' ? easeInCubic(u) : easeOutCubic(u);
+      const t = easeInCubic(u);
       const x = flying.from.x + (flying.to.x - flying.from.x) * t;
       const y = flying.from.y + (flying.to.y - flying.from.y) * t;
-      const baseLift = scene.pegH + scene.capH;
-      // Arc: high mid-flight for flyback, dive into peg for snap
-      let lift;
-      if (flying.kind === 'snap') {
-        lift = baseLift + 0.55 * (1 - t) + 0.05;
-      } else {
-        lift = baseLift + Math.sin(t * Math.PI) * 0.7;
-      }
+      const high = scene.pegH + scene.capH + 0.55;
+      const low = flying.onFloor === false
+        ? (scene.pegH + scene.capH * 0.5)
+        : scene.floorCapY();
+      // Dive from lift height into floor/peg — satisfying 착 붙는
+      const lift = high * (1 - t) + low * t;
       scene.setDragCap(
         { x, y },
         rs?.color || { hex: '#888', dark: '#444', light: '#ccc' },
-        { lift, scale: flying.squash < 1 ? 1 : 1.05 }
+        { lift, scale: flying.squash < 1 ? flying.squash : 1.05 }
       );
-      // Hide the static cap for this end while flying
     } else {
       scene.setHighlight(null);
       scene.setDragCap(null);
@@ -680,9 +847,37 @@ function dragCapToPeg(fromPegId, toPegId) {
   return true;
 }
 
+/** Demo/test: place a cap (from peg or floor) onto board CSS coords with snap. */
+function placeCapAt(ropeId, end, x, y) {
+  const rs = ropeStates.find(r => r.id === ropeId);
+  if (!rs) return false;
+  // Remove from peg if present
+  for (const peg of pegs) {
+    peg.stack = peg.stack.filter(c => !(c.ropeId === ropeId && c.end === end));
+  }
+  const ends = endPositions(ropeId);
+  const from = ends ? { x: ends[end].x, y: ends[end].y } : { x, y };
+  const resolved = resolveCapOverlap(
+    clampToPlayArea(x, y).x,
+    clampToPlayArea(x, y).y,
+    ropeId, end
+  );
+  snapAnims.push({
+    ropeId, end,
+    from, to: resolved,
+    t: 0, dur: SNAP_DUR, pegId: -1, squash: 1,
+    pendingCap: { ropeId, end },
+    kind: 'snap', onFloor: true,
+    floorX: resolved.x, floorY: resolved.y,
+    punched: false,
+  });
+  return true;
+}
+
 window.__tangle = {
   loadLevel, pegs: () => pegs, ropes: () => ropeStates,
-  dragCapToPeg, dragRingToPeg: dragCapToPeg, flushSnaps: () => {
+  dragCapToPeg, dragRingToPeg: dragCapToPeg, placeCapAt,
+  flushSnaps: () => {
     const pending = snapAnims.splice(0);
     for (const a of pending) finishSnap(a);
   },
@@ -690,4 +885,7 @@ window.__tangle = {
   checkClears: evaluateFrees, syncRopeEndsFromStacks, scene,
   measure: () => scene.measureScreenFractions(pegs),
   LEVEL_COUNT,
+  getDragging: () => dragging,
+  endPositions,
+  pointerToBoard: (cx, cy) => pointerToBoard(cx, cy, true),
 };

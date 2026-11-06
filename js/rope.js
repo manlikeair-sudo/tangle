@@ -160,8 +160,8 @@ export function initPoints(rs, ax, ay, bx, by, pegs, clearance) {
 function restLen(ax, ay, bx, by, wrapLen, dragging) {
   const direct = Math.hypot(bx - ax, by - ay);
   if (dragging) {
-    // Spring/rubber-band while dragging: rest tracks a bit under current span so tension rises
-    return Math.max(60, direct * 0.92);
+    // Rubber-band while dragging: rest slightly under span so tension rises with stretch
+    return Math.max(60, direct * 0.88);
   }
   // Settled: heavy slack — rope is 1.5–1.65× longer than straight peg distance
   const slack = 1.65;
@@ -201,8 +201,8 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
   rs.stretch = Math.hypot(bx - ax, by - ay) / Math.max(1, totalRest);
 
   // Spring/rubber-band: lag + settle into S-curves when slack
-  const damp = 0.86;
-  const g = rs._dragging ? 40 : 55;
+  const damp = 0.90;
+  const g = rs._dragging ? 28 : 48;
   for (let i = 1; i < n - 1; i++) {
     const p = pts[i];
     let vx = (p.x - p.ox) * damp;
@@ -234,7 +234,7 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
       let dx = b.x - a.x, dy = b.y - a.y;
       let d = Math.hypot(dx, dy) || 0.0001;
       // Soft spring: allow stretch, pull back gradually
-      const stiffness = (rs._dragging) ? 0.28 : 0.52;
+      const stiffness = (rs._dragging) ? 0.22 : 0.48;
       const corr = ((d - segRest) / d) * stiffness;
       if (i === 0) { b.x -= dx * corr; b.y -= dy * corr; }
       else if (i === n - 2) { a.x += dx * corr; a.y += dy * corr; }

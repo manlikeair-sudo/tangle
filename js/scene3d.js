@@ -174,6 +174,47 @@ export class Scene3D {
     return { x: nx * this.worldSpan, z: nz * this.worldSpan * zScale };
   }
 
+  /** Inverse of toWorld — board/CSS coords from world XZ. */
+  fromWorld(wx, wz) {
+    const zScale = 0.95;
+    const nx = wx / Math.max(1e-6, this.worldSpan);
+    const nz = wz / Math.max(1e-6, this.worldSpan * zScale);
+    return {
+      x: this.ox + (nx + 0.5) * this.boardW,
+      y: this.oy + (nz + 0.5) * this.boardH,
+    };
+  }
+
+  /**
+   * Raycast CSS-pixel pointer through the ortho camera onto a world Y plane,
+   * return board/CSS coords. Accounts for tilt + aspect (1:1 finger tracking).
+   */
+  screenToBoard(sx, sy, planeY = 0) {
+    const ndcX = (sx / Math.max(1, this.W)) * 2 - 1;
+    const ndcY = -(sy / Math.max(1, this.H)) * 2 + 1;
+    const near = new THREE.Vector3(ndcX, ndcY, -1).unproject(this.camera);
+    const far = new THREE.Vector3(ndcX, ndcY, 1).unproject(this.camera);
+    const dir = far.sub(near);
+    if (Math.abs(dir.y) < 1e-8) {
+      return this.fromWorld(near.x, near.z);
+    }
+    const t = (planeY - near.y) / dir.y;
+    const hx = near.x + dir.x * t;
+    const hz = near.z + dir.z * t;
+    return this.fromWorld(hx, hz);
+  }
+
+  /** Project a board-space point at a given world Y (cap center). */
+  projectBoardAt(px, py, worldY) {
+    const w = this.toWorld(px, py);
+    return this.projectWorld(w.x, worldY, w.z);
+  }
+
+  floorCapY() {
+    // Cap disc sits just above the floor rope height
+    return Math.max(this.ropeR * 0.35, this.capH * 0.55);
+  }
+
   _placeCamera() {
     const d = this._camDist;
     const t = this._camTilt;
@@ -466,8 +507,10 @@ export class Scene3D {
     // Centerline must clear floor by ≥ ropeR so the full round tube is visible
     // (floorY≈ropeR*1.02 buried the lower half → flat "ribbon" look from above)
     const floorY = this.ropeR * 1.18;
-    // Attach just under the magnet disc (near peg top), then drape to floor
-    const attachY = Math.max(this.ropeR * 1.5, this.pegH * 0.88);
+    const attachYPeg = Math.max(this.ropeR * 1.5, this.pegH * 0.88);
+    const attachYFloor = Math.max(this.floorCapY() * 0.85, this.ropeR * 1.35);
+    const a0 = ends[0].onFloor ? attachYFloor : attachYPeg;
+    const a1 = ends[1].onFloor ? attachYFloor : attachYPeg;
     const dropDist = this.ropeR * 3.6; // ~1.8 rope diameters — natural cap→floor drape
     // Insert explicit side-exit points so the tube exits horizontally under the cap
     if (pts.length >= 2) {
@@ -494,15 +537,18 @@ export class Scene3D {
     for (let i = 0; i < pts.length; i++) {
       const distA = lens[i];
       const distB = total - lens[i];
+      const u = i / Math.max(1, pts.length - 1);
+      // Blend end attach heights along the span; mid-span settles to floorY
+      const endAttach = a0 * (1 - u) + a1 * u;
       const near = Math.min(distA, distB);
       const rise = near < dropDist ? 1 - near / dropDist : 0;
       const riseSmooth = rise * rise * (3 - 2 * rise);
-      const dragLift = Math.max(0, scale - 1) * Math.sin((i / (pts.length - 1)) * Math.PI) * this.ropeR * 1.0;
-      const y = floorY + (attachY - floorY) * riseSmooth + dragLift;
+      const dragLift = Math.max(0, scale - 1) * Math.sin(u * Math.PI) * this.ropeR * 1.0;
+      const y = floorY + (endAttach - floorY) * riseSmooth + dragLift;
       out.push(new THREE.Vector3(pts[i].x, Math.max(floorY, y), pts[i].z));
     }
-    out[0].y = attachY;
-    out[out.length - 1].y = attachY;
+    out[0].y = a0;
+    out[out.length - 1].y = a1;
     return out;
   }
 
@@ -700,13 +746,12 @@ export class Scene3D {
         mesh.visible = true;
         mesh.renderOrder = 12;
         const w = this.toWorld(ep.x, ep.y);
-        const topY = this.pegH;
+        const topY = ep.onFloor ? this.floorCapY() : this.pegH;
         let sy = 1, sxz = 1;
         if (ep.squash && ep.squash !== 1) {
           sy = ep.squash;
           sxz = 1 + (1 - sy) * 0.4;
         }
-        // Cap sits flush on peg top
         mesh.position.set(w.x, topY, w.z);
         mesh.scale.set(sxz, sy, sxz);
       }
