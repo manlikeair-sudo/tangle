@@ -78,18 +78,18 @@ export class AudioBus {
   }
 
 
-  /** Soft magnetic "pop" on lift-off */
+  /** Soft magnetic "pop" on lift-off — muted ASMR click */
   pop() {
     if (!this.unlocked || this.muted) return;
     const c = this.ctx, t = c.currentTime;
     const o = c.createOscillator();
     const g = c.createGain();
     o.type = 'sine';
-    o.frequency.setValueAtTime(740, t);
-    o.frequency.exponentialRampToValueAtTime(420, t + 0.05);
-    this._env(g, t, 0.001, 0.02, 0.2, 0.04, 0.18);
+    o.frequency.setValueAtTime(620, t);
+    o.frequency.exponentialRampToValueAtTime(280, t + 0.07);
+    this._env(g, t, 0.002, 0.025, 0.35, 0.06, 0.11);
     o.connect(g); g.connect(this._master);
-    o.start(t); o.stop(t + 0.08);
+    o.start(t); o.stop(t + 0.11);
   }
 
   /** Crisp magnet "탁" — low thump + high tick */
@@ -114,18 +114,66 @@ export class AudioBus {
     this._env(g3, t, 0.001, 0.02, 0.2, 0.04, 0.35);
     o3.connect(g3); g3.connect(this._master);
     o3.start(t); o3.stop(t + 0.1);
-    // High tick "탁"
+    // Soft high tick (no harsh square)
     const o2 = c.createOscillator();
     const g2 = c.createGain();
-    o2.type = 'square';
-    o2.frequency.setValueAtTime(1800, t);
-    o2.frequency.exponentialRampToValueAtTime(600, t + 0.035);
-    this._env(g2, t, 0.0005, 0.012, 0.12, 0.03, 0.28);
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(1400, t);
+    o2.frequency.exponentialRampToValueAtTime(480, t + 0.045);
+    this._env(g2, t, 0.001, 0.015, 0.2, 0.04, 0.14);
     o2.connect(g2); g2.connect(this._master);
-    o2.start(t); o2.stop(t + 0.07);
+    o2.start(t); o2.stop(t + 0.09);
   }
 
   /** Pretty "퐁" — rising pitch on combo */
+
+  /** Soft rubbery stretch whisper — ASMR, not harsh creak. Throttled. */
+  stretch(tension) {
+    if (!this.unlocked || this.muted) return;
+    const now = performance.now();
+    if (this._stretchAt && now - this._stretchAt < 95) return;
+    this._stretchAt = now;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    const f = c.createBiquadFilter();
+    o.type = 'triangle'; // softer than sawtooth
+    const ten = Math.max(0, Math.min(1.5, tension));
+    o.frequency.setValueAtTime(110 + ten * 140, t);
+    o.frequency.linearRampToValueAtTime(130 + ten * 180, t + 0.07);
+    f.type = 'lowpass';
+    f.frequency.value = 320 + ten * 380;
+    f.Q.value = 0.9;
+    const peak = 0.007 + ten * 0.014;
+    this._env(g, t, 0.012, 0.04, 0.5, 0.07, peak);
+    o.connect(f); f.connect(g); g.connect(this._master);
+    o.start(t); o.stop(t + 0.14);
+  }
+
+  /** Soft boing recoil — warm lingering spring, ASMR not cartoon. */
+  boing(tension = 0.4) {
+    if (!this.unlocked || this.muted) return;
+    const c = this.ctx, t = c.currentTime;
+    const ten = Math.max(0.15, Math.min(1.4, tension));
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(220 + ten * 100, t);
+    o.frequency.exponentialRampToValueAtTime(110 + ten * 30, t + 0.32);
+    this._env(g, t, 0.004, 0.06, 0.45, 0.28, 0.10 + ten * 0.07);
+    o.connect(g); g.connect(this._master);
+    o.start(t); o.stop(t + 0.42);
+    // Soft harmonic bloom
+    const o2 = c.createOscillator();
+    const g2 = c.createGain();
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(330 + ten * 120, t);
+    o2.frequency.exponentialRampToValueAtTime(150, t + 0.22);
+    this._env(g2, t, 0.003, 0.05, 0.35, 0.18, 0.035 + ten * 0.03);
+    o2.connect(g2); g2.connect(this._master);
+    o2.start(t); o2.stop(t + 0.32);
+  }
+
   clear() {
     if (!this.unlocked || this.muted) return;
     this.clearStreak = (this.clearStreak || 0) + 1;

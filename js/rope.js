@@ -1,20 +1,21 @@
-/** Verlet ropes + rubber-band wrapping around pegs. */
+/**
+ * Damped spring-chain ropes (verlet, fixed 120Hz substeps).
+ * Elastic rest length stays fixed while dragging so stretch/tension are real.
+ */
 
-const SEGMENTS = 36;
+const SEGMENTS = 28;
+export const FIXED_DT = 1 / 120;
+const MAX_SUBSTEPS = 4;
 
 export function makeRopeState(rope) {
   return {
     id: rope.id, color: rope.color, points: null, z: rope.id,
     wobble: 0, clearing: false, clearT: 0, stretch: 1,
+    elasticRest: 0, tension: 0, _accum: 0,
   };
 }
 
-/**
- * Build a short, clean polyline that arcs around pegs between A and B.
- * Hard-capped so TubeGeometry never sees scribble noise.
- */
 export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
-  // Seed a slack S-curve longer than the chord so ropes drape, not cable-stretch
   const dx = bx - ax, dy = by - ay;
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len, ny = dx / len;
@@ -42,7 +43,6 @@ export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
       for (const peg of pegs) {
         if (Math.hypot(peg.x - ax, peg.y - ay) < clearance * 0.9) continue;
         if (Math.hypot(peg.x - bx, peg.y - by) < clearance * 0.9) continue;
-        // skip pegs that are already near an existing path vertex
         let nearVert = false;
         for (const v of path) {
           if (Math.hypot(v.x - peg.x, v.y - peg.y) < clearance * 0.55) { nearVert = true; break; }
@@ -52,23 +52,13 @@ export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
         if (depth > bestDepth) { bestDepth = depth; best = peg; }
       }
       if (best && bestDepth > 0.8) {
-        const t = closestT(p0, p1, best);
-        const cx = p0.x + (p1.x - p0.x) * t;
-        const cy = p0.y + (p1.y - p0.y) * t;
-        let ox = cx - best.x, oy = cy - best.y;
+        let ox = (p0.x + (p1.x - p0.x) * closestT(p0, p1, best)) - best.x;
+        let oy = (p0.y + (p1.y - p0.y) * closestT(p0, p1, best)) - best.y;
         let ol = Math.hypot(ox, oy) || 1;
-        if (ol < 1e-3) {
-          ox = -(p1.y - p0.y); oy = (p1.x - p0.x);
-          ol = Math.hypot(ox, oy) || 1;
-        }
-        // outward unit
+        if (ol < 1e-3) { ox = -(p1.y - p0.y); oy = (p1.x - p0.x); ol = Math.hypot(ox, oy) || 1; }
         const ux = ox / ol, uy = oy / ol;
-        const tx = -uy, ty = ux;
-        const wx = best.x + ux * clearance;
-        const wy = best.y + uy * clearance;
-        // Circular-ish wrap: 5 samples on the clearance circle (stable, round bends)
         const base = Math.atan2(uy, ux);
-        const half = 1.05; // radians either side
+        const half = 1.05;
         for (let k = -2; k <= 2; k++) {
           const ang = base + (k / 2) * half;
           next.push({ x: best.x + Math.cos(ang) * clearance, y: best.y + Math.sin(ang) * clearance });
@@ -79,21 +69,17 @@ export function wrapPolyline(ax, ay, bx, by, pegs, clearance) {
         next.push(p1);
       }
     }
-    // merge near-duplicates
     const cleaned = [next[0]];
     for (let i = 1; i < next.length; i++) {
       const prev = cleaned[cleaned.length - 1];
       if (Math.hypot(next[i].x - prev.x, next[i].y - prev.y) > 10) cleaned.push(next[i]);
       else if (i === next.length - 1) cleaned[cleaned.length - 1] = next[i];
     }
-    // force ends
     cleaned[0] = { x: ax, y: ay };
     cleaned[cleaned.length - 1] = { x: bx, y: by };
     path = cleaned;
     if (!changed) break;
   }
-
-  // Final arc-length resample to a modest, even set of control points
   return resamplePath(path, Math.min(20, Math.max(6, path.length + 3)));
 }
 
@@ -122,16 +108,14 @@ function resamplePath(path, n) {
 function closestT(a, b, p) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len2 = dx * dx + dy * dy || 1;
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
-  return Math.max(0, Math.min(1, t));
+  return Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
 }
 
 function segCirclePenetration(a, b, peg, r) {
   const t = closestT(a, b, peg);
   const cx = a.x + (b.x - a.x) * t;
   const cy = a.y + (b.y - a.y) * t;
-  const d = Math.hypot(cx - peg.x, cy - peg.y);
-  return r - d;
+  return r - Math.hypot(cx - peg.x, cy - peg.y);
 }
 
 export function initPoints(rs, ax, ay, bx, by, pegs, clearance) {
@@ -155,54 +139,50 @@ export function initPoints(rs, ax, ay, bx, by, pegs, clearance) {
     pts.push({ x, y, ox: x, oy: y });
   }
   rs.points = pts;
+  // Slack rest ≈ path length (already curved) — fixed elastic length
+  const chord = Math.hypot(bx - ax, by - ay);
+  rs.elasticRest = Math.max(chord * 1.35, total * 0.98, 90);
+  rs.stretch = chord / rs.elasticRest;
+  rs._accum = 0;
+  rs._lastA = { x: ax, y: ay };
+  rs._lastB = { x: bx, y: by };
 }
 
-function restLen(ax, ay, bx, by, wrapLen, dragging) {
-  const direct = Math.hypot(bx - ax, by - ay);
-  if (dragging) {
-    // Rubber-band while dragging: rest slightly under span so tension rises with stretch
-    return Math.max(60, direct * 0.88);
+function pathLen(pts) {
+  let L = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
+    if (Number.isFinite(dx) && Number.isFinite(dy)) L += Math.hypot(dx, dy);
   }
-  // Settled: heavy slack — rope is 1.5–1.65× longer than straight peg distance
-  const slack = 1.65;
-  const target = Math.max(80, direct * slack);
-  // Prefer wrapLen if it already has S-bends baked in
-  if (wrapLen && wrapLen > direct * 1.2) return Math.max(target, wrapLen * 0.98);
-  return target;
+  return L;
 }
 
-export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
-  if (!rs.points || rs.clearing) return;
+function stepOnce(rs, ax, ay, bx, by, pegs, clearance, dt) {
   const pts = rs.points;
   const n = pts.length;
-  const clearance = pegR + ropeHalf * 2.0 + 2; // arc radius ≥ rope diameter → no tube fold // keep centerline bend ≥ tube radius
+  if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return;
+  const rest = rs.elasticRest || Math.max(90, Math.hypot(bx - ax, by - ay) * 1.4);
+  const segRest = rest / (n - 1);
 
-  if (!rs._lastA) rs._lastA = { x: ax, y: ay };
-  if (!rs._lastB) rs._lastB = { x: bx, y: by };
-  const moved = Math.hypot(ax - rs._lastA.x, ay - rs._lastA.y) + Math.hypot(bx - rs._lastB.x, by - rs._lastB.y);
-  if (moved > 28) {
-    const old = pts.map(p => ({ x: p.x, y: p.y }));
-    initPoints(rs, ax, ay, bx, by, pegs, clearance);
-    for (let i = 0; i < n; i++) {
-      pts[i].x = old[i].x * 0.35 + pts[i].x * 0.65;
-      pts[i].y = old[i].y * 0.35 + pts[i].y * 0.65;
-      pts[i].ox = pts[i].x; pts[i].oy = pts[i].y;
-    }
-    rs._lastA = { x: ax, y: ay }; rs._lastB = { x: bx, y: by };
-  }
-
+  // Pin ends
   pts[0].x = ax; pts[0].y = ay; pts[0].ox = ax; pts[0].oy = ay;
   pts[n - 1].x = bx; pts[n - 1].y = by; pts[n - 1].ox = bx; pts[n - 1].oy = by;
 
-  let curLen = 0;
-  for (let i = 1; i < n; i++) curLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-  const totalRest = restLen(ax, ay, bx, by, curLen, rs._dragging);
-  const segRest = totalRest / (n - 1);
-  rs.stretch = Math.hypot(bx - ax, by - ay) / Math.max(1, totalRest);
+  // Heal any NaN midpoints before integrating
+  for (let i = 1; i < n - 1; i++) {
+    const p = pts[i];
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.ox) || !Number.isFinite(p.oy)) {
+      const t = i / (n - 1);
+      p.x = ax + (bx - ax) * t;
+      p.y = ay + (by - ay) * t;
+      p.ox = p.x; p.oy = p.y;
+    }
+  }
 
-  // Spring/rubber-band: lag + settle into S-curves when slack
-  const damp = 0.90;
-  const g = rs._dragging ? 28 : 48;
+  // Verlet: during drag mid-rope lags (inertia); settled = heavy soft drape
+  // Ref (~Ropeland): finger nearly 1:1, body follows with soft lag; settle ~0.5–0.65s
+  const damp = rs._dragging ? 0.968 : (rs.wobble > 0.12 ? 0.982 : 0.955);
+  const g = rs._dragging ? 280 : 1100; // heavier slack sag when free
   for (let i = 1; i < n - 1; i++) {
     const p = pts[i];
     let vx = (p.x - p.ox) * damp;
@@ -211,31 +191,37 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
     p.x += vx;
     p.y += vy + g * dt * dt;
   }
-  // When settled with slack, gently bias midpoints into a soft S-bend (floor drape)
-  if (!rs._dragging && rs.wobble < 0.05) {
+
+  // Soft S-bias only when very slack & settled (helps natural curves, no fight with tension)
+  const chord = Math.hypot(bx - ax, by - ay);
+  const ratio = chord / Math.max(1, rest);
+  if (!rs._dragging && rs.wobble < 0.15 && ratio < 0.96) {
     const dx = bx - ax, dy = by - ay;
-    const len = Math.hypot(dx, dy) || 1;
+    const len = chord || 1;
     const nx = -dy / len, ny = dx / len;
     const seed = (rs.id || 0) * 1.7;
+    // Gentle S-sag so slack ropes look relaxed/heavy, not stiff chords
+    const amp = Math.min(chord * 0.38, Math.max(0, rest - chord) * 0.28);
     for (let i = 1; i < n - 1; i++) {
       const t = i / (n - 1);
       const sCurve = Math.sin(t * Math.PI * 2 + seed) * Math.sin(t * Math.PI);
-      const amp = len * 0.18;
       pts[i].x += nx * sCurve * amp * dt * 2.2;
       pts[i].y += ny * sCurve * amp * dt * 2.2;
     }
   }
 
-  // Softer constraint iterations → stretchy spring feel; more iters on settle
-  const iters = (rs._dragging || rs.wobble > 0.15) ? 6 : 14;
+  // Soft rubber while dragged; settle soft-heavy (not stiff plastic)
+  const stiffness = rs._dragging ? 0.22 : (rs.wobble > 0.2 ? 0.28 : 0.36);
+  const iters = rs._dragging ? 4 : (rs.wobble > 0.15 ? 5 : 6);
   for (let it = 0; it < iters; it++) {
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       let dx = b.x - a.x, dy = b.y - a.y;
-      let d = Math.hypot(dx, dy) || 0.0001;
-      // Soft spring: allow stretch, pull back gradually
-      const stiffness = (rs._dragging) ? 0.22 : 0.48;
-      const corr = ((d - segRest) / d) * stiffness;
+      let d = Math.hypot(dx, dy) || 1e-4;
+      // Nonlinear spring: stretch harder beyond rest (rubber)
+      const strain = (d - segRest) / segRest;
+      const k = stiffness * (1 + Math.max(0, Math.min(2, strain)) * 0.7);
+      const corr = Math.max(-0.9, Math.min(0.9, ((d - segRest) / d) * k));
       if (i === 0) { b.x -= dx * corr; b.y -= dy * corr; }
       else if (i === n - 2) { a.x += dx * corr; a.y += dy * corr; }
       else {
@@ -243,54 +229,197 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
         b.x -= dx * corr * 0.5; b.y -= dy * corr * 0.5;
       }
     }
+    // Peg collision — push out, prevent tunneling
     for (let i = 1; i < n - 1; i++) {
       const p = pts[i];
       for (const peg of pegs) {
         const dx = p.x - peg.x, dy = p.y - peg.y;
-        const d = Math.hypot(dx, dy) || 0.0001;
+        const d = Math.hypot(dx, dy) || 1e-4;
         if (d < clearance) {
           const push = (clearance - d) / d;
           p.x += dx * push;
           p.y += dy * push;
+          // Kill inward velocity (via ox/oy)
+          const vx = p.x - p.ox, vy = p.y - p.oy;
+          const vn = vx * (dx / d) + vy * (dy / d);
+          if (vn < 0) {
+            p.ox = p.x - (vx - vn * (dx / d));
+            p.oy = p.y - (vy - vn * (dy / d));
+          }
         }
+      }
+    }
+    // Min bend radius — prevent kinked self-overlapping folds
+    const minBendR = Math.max(segRest * 1.55, clearance * 1.2);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 1; i < n - 1; i++) {
+        const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+        const d1 = Math.hypot(b.x - a.x, b.y - a.y) || 1e-6;
+        const d2 = Math.hypot(c.x - b.x, c.y - b.y) || 1e-6;
+        const d3 = Math.hypot(c.x - a.x, c.y - a.y) || 1e-6;
+        const area2 = Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+        if (area2 < 1e-4) continue;
+        const R = (d1 * d2 * d3) / (2 * area2);
+        if (R >= minBendR) continue;
+        const mx = (a.x + c.x) * 0.5, my = (a.y + c.y) * 0.5;
+        const t = Math.min(0.7, (minBendR - R) / Math.max(1e-3, minBendR));
+        b.x += (mx - b.x) * t;
+        b.y += (my - b.y) * t;
       }
     }
     pts[0].x = ax; pts[0].y = ay;
     pts[n - 1].x = bx; pts[n - 1].y = by;
   }
 
+  // Recoil — match ref: ~2 soft overshoots, settle ~0.55–0.7s (힐링)
   if (rs.wobble > 0) {
     const w = rs.wobble;
+    const nx = -(by - ay), ny = (bx - ax);
+    const nl = Math.hypot(nx, ny) || 1;
+    const phase = (rs._wobblePhase || 0);
     for (let i = 1; i < n - 1; i++) {
       const t = i / (n - 1);
-      const wave = Math.sin(t * Math.PI * 2.2 + w * 10) * w * 2.5;
-      const nx = -(by - ay), ny = (bx - ax);
-      const nl = Math.hypot(nx, ny) || 1;
-      pts[i].x += (nx / nl) * wave * 0.14;
-      pts[i].y += (ny / nl) * wave * 0.14;
+      const envelope = Math.sin(t * Math.PI);
+      // One soft lateral wave — not jittery high-freq
+      const wave = Math.sin(t * Math.PI * 1.4 + phase) * w * envelope;
+      pts[i].x += (nx / nl) * wave * 0.58;
+      pts[i].y += (ny / nl) * wave * 0.58;
     }
-    rs.wobble = Math.max(0, w - dt * 3.2);
+    rs._wobblePhase = phase + dt * 16; // ~2.5 Hz feel
+    rs.wobble = Math.max(0, w - dt * 1.55); // settle ~0.6s from amp~1
   }
 }
 
-export function impulseWobble(rs, amount = 1) {
-  rs.wobble = Math.min(2.2, (rs.wobble || 0) + amount);
+/**
+ * Frame-rate independent spring sim. Returns wall-clock ms spent (for profiling).
+ */
+export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
+  if (!rs.points || rs.clearing) return 0;
+  const t0 = performance.now();
+  const pts = rs.points;
+  const n = pts.length;
+  const clearance = pegR + ropeHalf * 2.0 + 2;
+
+  if (!rs._lastA) rs._lastA = { x: ax, y: ay };
+  if (!rs._lastB) rs._lastB = { x: bx, y: by };
+  const moved = Math.hypot(ax - rs._lastA.x, ay - rs._lastA.y) + Math.hypot(bx - rs._lastB.x, by - rs._lastB.y);
+  // Reseed only on large jumps (level load / teleport), blend to avoid pop
+  if (moved > 80) {
+    const old = pts.map(p => ({ x: p.x, y: p.y }));
+    const keepRest = rs.elasticRest;
+    initPoints(rs, ax, ay, bx, by, pegs, clearance);
+    if (keepRest > 40) rs.elasticRest = keepRest;
+    for (let i = 1; i < n - 1; i++) {
+      pts[i].x = old[i].x * 0.4 + pts[i].x * 0.6;
+      pts[i].y = old[i].y * 0.4 + pts[i].y * 0.6;
+      pts[i].ox = pts[i].x; pts[i].oy = pts[i].y;
+    }
+    pts[0].x = ax; pts[0].y = ay; pts[0].ox = ax; pts[0].oy = ay;
+    pts[n - 1].x = bx; pts[n - 1].y = by; pts[n - 1].ox = bx; pts[n - 1].oy = by;
+  }
+  rs._lastA = { x: ax, y: ay }; rs._lastB = { x: bx, y: by };
+
+  if (!rs.elasticRest || rs.elasticRest < 40) {
+    const chord = Math.hypot(bx - ax, by - ay);
+    rs.elasticRest = Math.max(90, chord * 1.4);
+  }
+
+  // Slowly adapt rest when settled (new placement) so slack looks natural
+  if (!rs._dragging && rs.wobble < 0.05) {
+    const chord = Math.hypot(bx - ax, by - ay);
+    const target = Math.max(90, Math.min(chord * 2.2, chord * 1.42));
+    rs.elasticRest += (target - rs.elasticRest) * Math.min(1, dt * 0.7);
+    // Prevent runaway rest from wrapped init paths
+    if (rs.elasticRest > chord * 2.4 && chord > 40) rs.elasticRest = chord * 2.4;
+  }
+
+  rs._accum = (rs._accum || 0) + Math.min(0.05, dt);
+  let steps = 0;
+  while (rs._accum >= FIXED_DT && steps < MAX_SUBSTEPS) {
+    stepOnce(rs, ax, ay, bx, by, pegs, clearance, FIXED_DT);
+    rs._accum -= FIXED_DT;
+    steps++;
+  }
+  // Prevent spiral of death
+  if (rs._accum > FIXED_DT * 2) rs._accum = 0;
+
+  // Sanitize + rein in runaway midpoints BEFORE measuring stretch
+  const chordSafe = Math.hypot(bx - ax, by - ay) || 1;
+  const maxDev = Math.max(chordSafe * 1.2, 180);
+  for (let i = 1; i < n - 1; i++) {
+    const p = pts[i];
+    const t = i / (n - 1);
+    const cx = ax + (bx - ax) * t;
+    const cy = ay + (by - ay) * t;
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+      p.x = cx; p.y = cy; p.ox = cx; p.oy = cy;
+      continue;
+    }
+    const dx = p.x - cx, dy = p.y - cy;
+    const d = Math.hypot(dx, dy);
+    if (d > maxDev) {
+      const s = maxDev / d;
+      p.x = cx + dx * s;
+      p.y = cy + dy * s;
+      p.ox = p.x; p.oy = p.y;
+    }
+  }
+
+  const cur = pathLen(pts);
+  const chord = Math.hypot(bx - ax, by - ay) || 1;
+  const rest = Math.max(60, rs.elasticRest || chord * 1.3);
+  let stretchVal = cur / rest;
+  if (!Number.isFinite(stretchVal) || stretchVal <= 0) stretchVal = chord / rest;
+  if (!Number.isFinite(stretchVal) || stretchVal <= 0) stretchVal = 1;
+  if (rs._dragging) stretchVal = Math.max(stretchVal, chord / rest);
+  rs.stretch = Math.max(0.75, Math.min(2.4, stretchVal));
+  if (!rs._dragging) {
+    rs.tension = Math.max(0, chord / rest - 0.98);
+  }
+
+  // Cap is authoritative: hard-pin first/last every frame (even if no substep ran)
+  pts[0].x = ax; pts[0].y = ay; pts[0].ox = ax; pts[0].oy = ay;
+  pts[n - 1].x = bx; pts[n - 1].y = by; pts[n - 1].ox = bx; pts[n - 1].oy = by;
+
+  return performance.now() - t0;
 }
 
-/** Kick mid-rope velocities for 1–2 damped body oscillations (cap stays pinned). */
+export function impulseWobble(rs, amount = 1) {
+  rs.wobble = Math.min(2.4, (rs.wobble || 0) + amount);
+  rs._wobblePhase = 0;
+}
+
+/** Kick mid-rope for lively overshoot-and-settle (2–3 oscillations). */
 export function springKick(rs, strength = 1) {
   if (!rs.points) return;
   const pts = rs.points;
   const n = pts.length;
+  const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
+  const nx = -(by - ay), ny = (bx - ax);
+  const nl = Math.hypot(nx, ny) || 1;
+  // Soft axial compress + lateral — real spring overshoot without snap-jitter
+  const lx = (bx - ax) / (Math.hypot(bx - ax, by - ay) || 1);
+  const ly = (by - ay) / (Math.hypot(bx - ax, by - ay) || 1);
   for (let i = 1; i < n - 1; i++) {
     const t = i / (n - 1);
-    const amp = Math.sin(t * Math.PI) * strength * 18;
-    // Lateral kick relative to current end vector
-    const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
-    const nx = -(by - ay), ny = (bx - ax);
-    const nl = Math.hypot(nx, ny) || 1;
-    pts[i].ox = pts[i].x - (nx / nl) * amp * 0.35;
-    pts[i].oy = pts[i].y - (ny / nl) * amp * 0.35;
+    const envelope = Math.sin(t * Math.PI);
+    const ampL = envelope * strength * 18;
+    const ampA = envelope * strength * 16;
+    pts[i].ox = pts[i].x - (nx / nl) * ampL * 0.45 - lx * ampA * 0.35;
+    pts[i].oy = pts[i].y - (ny / nl) * ampL * 0.45 - ly * ampA * 0.35;
   }
-  rs.wobble = Math.min(2.2, (rs.wobble || 0) + strength * 0.85);
+  rs.wobble = Math.min(2.8, (rs.wobble || 0) + strength * 1.55);
+  rs._wobblePhase = 0;
+}
+
+/** Capture elastic rest at grab so stretch builds from a real baseline. */
+export function captureRest(rs, ax, ay, bx, by) {
+  if (!rs.points) return;
+  const L = pathLen(rs.points);
+  const chord = Math.hypot(bx - ax, by - ay) || 80;
+  // Rest ≈ current chord with modest slack — stretch builds as you pull away
+  const fromPath = Number.isFinite(L) ? L * 0.85 : chord * 1.2;
+  rs.elasticRest = Math.max(80, Math.min(chord * 1.55, Math.max(fromPath, chord * 1.12)));
+  rs.stretch = 1;
+  rs.tension = 0;
 }

@@ -1,6 +1,6 @@
 import { AudioBus } from './audio.js';
 import { generateLevel, LEVEL_COUNT } from './levels.js';
-import { makeRopeState, initPoints, simulateRope, impulseWobble, springKick, wrapPolyline } from './rope.js';
+import { makeRopeState, initPoints, simulateRope, impulseWobble, springKick, wrapPolyline, captureRest } from './rope.js';
 import { Scene3D } from './scene3d.js';
 import { Particles } from './particles2d.js';
 import { ropeIsCrossed } from './crossing.js';
@@ -36,8 +36,10 @@ const FREE_DELAY = 0.5;
 const RETRACT_DUR = 0.2;
 const SNAP_DUR = 0.07; // 70 ms ease-in snap to floor/peg
 const LIFT_DUR = 0.08; // magnetic pop lift
-const FOLLOW = 0.92; // nearly 1:1 pointer tracking (tiny soften only)
-const MAX_STRETCH = 1.9; // rubber-band max vs rest length; beyond = spring resist
+const FOLLOW_BASE = 0.97; // ref: nearly 1:1 finger tracking
+const MAX_STRETCH = 1.85; // hard rubber stop vs elastic rest
+const TENSION_SOFT = 0.15; // start gentle tug (keep 1:1 below this)
+const TENSION_HARD = 0.75; // heavy rubber resistance
 const CAP_SEP_MUL = 2.15; // min center distance between caps ≈ 2.15× CAP_R
 const EDGE_PAD = 18; // keep caps inside visible play area
 
@@ -180,7 +182,12 @@ function endPositions(ropeId) {
   const out = [];
   for (let e = 0; e < 2; e++) {
     if (dragging && dragging.ropeId === ropeId && dragging.end === e) {
-      out.push({ x: dragging.x, y: dragging.y, pegId: -1, stackIndex: -1, lifted: true, onFloor: true });
+      const liftEase = easeOutCubic(Math.min(1, dragging.liftT || 0));
+      const liftY = scene.pegH + scene.capH + 0.15 + liftEase * 0.55;
+      out.push({
+        x: dragging.x, y: dragging.y, pegId: -1, stackIndex: -1,
+        lifted: true, onFloor: false, liftY,
+      });
       continue;
     }
     const anim = snapAnims.find(a => a.ropeId === ropeId && a.end === e);
@@ -363,16 +370,51 @@ function restLengthForRope(rs) {
   return Math.max(80, d * 1.55);
 }
 
-function applyMaxStretch(x, y, otherX, otherY, restLen) {
-  const maxD = Math.max(restLen * MAX_STRETCH, 120);
+function applySpringFeel(x, y, otherX, otherY, restLen, fingerX, fingerY) {
+  // x,y already near finger. Apply gentle nonlinear tug + hard clamp.
+  const rest = Math.max(60, restLen || 120);
   const dx = x - otherX, dy = y - otherY;
-  const d = Math.hypot(dx, dy);
-  if (d <= maxD || d < 1e-4) return { x, y, stretched: d / Math.max(1, restLen) };
-  // Soft spring beyond max: allow a little extra with strong resistance
-  const excess = d - maxD;
-  const allowed = maxD + excess * 0.18;
-  const s = allowed / d;
-  return { x: otherX + dx * s, y: otherY + dy * s, stretched: allowed / Math.max(1, restLen) };
+  const d = Math.hypot(dx, dy) || 1e-4;
+  const ratio = d / rest;
+  const tension = Math.max(0, ratio - 1.0);
+
+  let px = x, py = y;
+  // Soft zone: almost no tug (accurate tracking). Hard zone: growing rubber pull.
+  if (tension > TENSION_SOFT) {
+    const t = Math.min(1, (tension - TENSION_SOFT) / Math.max(0.05, TENSION_HARD - TENSION_SOFT));
+    const tug = t * t * 0.22; // max ~22% pull-back — feel spring, keep finger accuracy
+    const pullD = Math.max(0, d - rest);
+    if (pullD > 0) {
+      const s = (d - pullD * tug) / d;
+      px = otherX + dx * s;
+      py = otherY + dy * s;
+    }
+  }
+
+  const maxD = Math.max(rest * MAX_STRETCH, 140);
+  const dx2 = px - otherX, dy2 = py - otherY;
+  const d2 = Math.hypot(dx2, dy2) || 1e-4;
+  if (d2 > maxD) {
+    const excess = d2 - maxD;
+    const allowed = maxD + excess * 0.15;
+    const s = allowed / d2;
+    px = otherX + dx2 * s;
+    py = otherY + dy2 * s;
+  }
+
+  const finalD = Math.hypot(px - otherX, py - otherY);
+  const finalRatio = finalD / rest;
+  let follow = FOLLOW_BASE;
+  if (tension > TENSION_SOFT) {
+    const t = Math.min(1, (tension - TENSION_SOFT) / (TENSION_HARD + 0.35));
+    follow = FOLLOW_BASE * (1 - t * 0.28) + 0.62 * t; // soft rubber but still tracks
+  }
+  return {
+    x: px, y: py,
+    stretched: Math.max(0.7, finalRatio),
+    tension: Math.max(0, finalRatio - 1),
+    follow,
+  };
 }
 
 function haptic(ms = 8) {
@@ -442,7 +484,9 @@ function onDown(e) {
     const ends = endPositions(rs.id);
     if (ends) {
       const other = ends[1 - g.end];
-      rs._restLen = Math.max(80, Math.hypot(g.originX - other.x, g.originY - other.y) * 1.55);
+      captureRest(rs, g.originX, g.originY, other.x, other.y);
+      rs._restLen = rs.elasticRest;
+      springKick(rs, 0.45); // small pop-up spring on lift
     }
   }
   audio.pop();
@@ -486,6 +530,14 @@ function onUp(e) {
     const clamped = clampToPlayArea(tx, ty);
     const resolved = resolveCapOverlap(clamped.x, clamped.y, dragging.ropeId, dragging.end);
     tx = resolved.x; ty = resolved.y;
+  }
+
+  const releaseTension = rs ? (rs.tension || 0) : 0;
+  if (rs) {
+    // Ref settle: ~2 soft overshoots in ~0.55–0.7s, not wild
+    springKick(rs, 0.75 + Math.min(0.7, releaseTension * 0.75));
+    impulseWobble(rs, 0.95 + Math.min(0.7, releaseTension * 0.7));
+    audio.boing(Math.min(1.0, 0.25 + releaseTension * 0.8));
   }
 
   snapAnims.push({
@@ -532,11 +584,11 @@ function finishSnap(anim) {
     }
   }
   if (rs) {
-    springKick(rs, 1.05);
-    impulseWobble(rs, 0.85);
+    // Soft secondary settle pulse after landing squash
+    springKick(rs, 0.35);
   }
   audio.snap();
-  haptic(12);
+  haptic(14);
   evaluateFrees();
 }
 
@@ -634,30 +686,43 @@ function tick(ts) {
     updateTimerHud();
   }
 
-  // Drag: near-1:1 finger tracking in floor-plane coords + rubber-band max stretch
+  // Drag: 1:1 until tension, then rubbery spring resistance you can feel
   if (dragging) {
     dragging.liftT = Math.min(1, dragging.liftT + dt / LIFT_DUR);
-    // Tiny soften only — mostly 1:1 with pointer raycast target
-    dragging.x += (dragging.tx - dragging.x) * FOLLOW;
-    dragging.y += (dragging.ty - dragging.y) * FOLLOW;
-
-    // Rubber-band stretch limit vs the other end
     const rsDrag = ropeStates.find(r => r.id === dragging.ropeId);
     const endsNow = endPositions(dragging.ropeId);
+    let follow = FOLLOW_BASE;
     if (endsNow && rsDrag) {
       const other = endsNow[1 - dragging.end];
-      const rest = rsDrag._restLen || restLengthForRope(rsDrag);
-      const lim = applyMaxStretch(dragging.x, dragging.y, other.x, other.y, rest);
-      dragging.x = lim.x;
-      dragging.y = lim.y;
+      const rest = rsDrag.elasticRest || rsDrag._restLen || restLengthForRope(rsDrag);
+      // Follow finger, then spring-feel tug (keeps tracking until hard tension)
+      dragging.x += (dragging.tx - dragging.x) * FOLLOW_BASE;
+      dragging.y += (dragging.ty - dragging.y) * FOLLOW_BASE;
+      const lim = applySpringFeel(dragging.x, dragging.y, other.x, other.y, rest, dragging.tx, dragging.ty);
+      follow = lim.follow;
+      // Rubbery ease toward spring-resolved pose (stronger lag only when taut)
+      const blend = 0.30 + (1 - follow / FOLLOW_BASE) * 0.45; // snappier mid-drag
+      dragging.x += (lim.x - dragging.x) * blend;
+      dragging.y += (lim.y - dragging.y) * blend;
       rsDrag.stretch = lim.stretched;
+      rsDrag.tension = lim.tension;
+
+      // Quiet stretch creak + haptic ticks at tension thresholds
+      if (lim.tension > 0.12) {
+        audio.stretch(lim.tension);
+        const band = Math.floor(lim.tension * 6);
+        if (band !== dragging._hapBand) {
+          dragging._hapBand = band;
+          haptic(band >= 4 ? 14 : 7);
+        }
+      }
+    } else {
+      dragging.x += (dragging.tx - dragging.x) * follow;
+      dragging.y += (dragging.ty - dragging.y) * follow;
     }
 
-    // Soft clamp while dragging (still allow near edges)
     const c = clampToPlayArea(dragging.x, dragging.y);
     dragging.x = c.x; dragging.y = c.y;
-
-    // Optional highlight when very near an empty peg (no force-pull while dragging)
     dragging.stickyPeg = emptyPegNear(dragging.x, dragging.y, PEG_ASSIST_R);
   }
 
@@ -668,10 +733,16 @@ function tick(ts) {
     if (anim.kind === 'snap') {
       // 1-frame scale punch at landing
       if (u >= 1 && !anim.punched) {
-        anim.squash = 0.85;
+        anim.squash = 0.72; // stronger landing squash
         anim.punched = true;
+        anim._bounceT = 0;
       } else if (anim.punched) {
-        anim.squash = Math.min(1, anim.squash + dt * 8);
+        anim._bounceT = (anim._bounceT || 0) + dt;
+        // Squash then slight stretch overshoot
+        const bt = anim._bounceT;
+        if (bt < 0.06) anim.squash = 0.72 + bt / 0.06 * 0.38;
+        else if (bt < 0.14) anim.squash = 1.1 - (bt - 0.06) / 0.08 * 0.1;
+        else anim.squash = Math.min(1, anim.squash + dt * 6);
       } else {
         anim.squash = 1;
       }
@@ -679,11 +750,11 @@ function tick(ts) {
       anim.squash = 1;
     }
   }
-  const finished = snapAnims.filter(a => a.t >= a.dur && (a.kind !== 'snap' || a.squash >= 0.99 || a.t >= a.dur + 0.06));
+  const finished = snapAnims.filter(a => a.t >= a.dur && (a.kind !== 'snap' || a.squash >= 0.99 || a.t >= a.dur + 0.16));
   // Keep snap briefly for squash punch
   snapAnims = snapAnims.filter(a => {
     if (a.t < a.dur) return true;
-    if (a.kind === 'snap' && a.t < a.dur + 0.06) return true;
+    if (a.kind === 'snap' && a.t < a.dur + 0.16) return true;
     return false;
   });
   for (const a of finished) {
@@ -731,6 +802,7 @@ function tick(ts) {
     }
   }
 
+  let physMs = 0;
   for (const rs of ropeStates) {
     if (rs.clearing && rs.clearT > RETRACT_DUR + 0.15) continue;
     const ends = endPositions(rs.id);
@@ -738,19 +810,36 @@ function tick(ts) {
     if (!rs.points) {
       initPoints(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R + ROPE_W * 0.7 + 6);
     }
-    simulateRope(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R, ROPE_W * 0.5, dt);
+    physMs += simulateRope(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R, ROPE_W * 0.5, dt) || 0;
+  }
+  // Rolling fps / phys profile (for __tangle.perf)
+  const now = performance.now();
+  if (!window.__perf) window.__perf = { frames: 0, phys: 0, last: now, fps: 60, physMs: 0 };
+  window.__perf.frames++;
+  window.__perf.phys += physMs;
+  if (now - window.__perf.last >= 500) {
+    const elapsed = (now - window.__perf.last) / 1000;
+    window.__perf.fps = window.__perf.frames / elapsed;
+    window.__perf.physMs = window.__perf.phys / window.__perf.frames;
+    window.__perf.frames = 0;
+    window.__perf.phys = 0;
+    window.__perf.last = now;
   }
 
   particles.update(dt);
   checkWin();
 
   scene.syncPegs(pegs);
-  const wrapClear = PEG_R + ROPE_W * 0.85 + 8;
+  // Drive mesh from verlet spring points (real stretch/sag). Geometric wrap only as rare fallback.
   for (const rs of ropeStates) {
     if (rs.clearing && rs.retracting && rs.clearT > 0.05) continue;
-    const ends = endPositions(rs.id);
-    if (!ends) continue;
-    rs._wrapPath = wrapPolyline(ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, wrapClear);
+    if (rs.points && rs.points.length >= 2) {
+      rs._wrapPath = null; // force scene to use simulated points
+    } else {
+      const ends = endPositions(rs.id);
+      if (!ends) continue;
+      rs._wrapPath = wrapPolyline(ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R + ROPE_W * 0.85 + 8);
+    }
   }
   const dragInfo = dragging ? { ropeId: dragging.ropeId, end: dragging.end } : null;
   scene.syncRopes(ropeStates, endPositions, dragInfo);
@@ -884,6 +973,7 @@ window.__tangle = {
   audio, coins: () => coins, timeLeft: () => timeLeft,
   checkClears: evaluateFrees, syncRopeEndsFromStacks, scene,
   measure: () => scene.measureScreenFractions(pegs),
+  perf: () => window.__perf ? { fps: window.__perf.fps, physMs: window.__perf.physMs } : null,
   LEVEL_COUNT,
   getDragging: () => dragging,
   endPositions,
