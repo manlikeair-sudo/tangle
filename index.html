@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Tangle — Rope Match</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+    <canvas id="fx"></canvas>
+    <div id="hud">
+      <button id="btn-settings" class="btn-gear" aria-label="설정">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.07 7.07 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.6.24-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.68.22l2.39-.96c.5.4 1.04.71 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.6-.24 1.14-.55 1.63-.94l2.39.96c.25.1.54 0 .68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+      </button>
+      <div id="hud-pill">
+        <div class="pill-level">
+          <span class="lvl-label">Level</span>
+          <span class="lvl-num" id="hud-level">1</span>
+        </div>
+        <div class="pill-timer">
+          <svg class="clock-svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="13" r="8" fill="#3B82F6" stroke="#1E40AF" stroke-width="1.5"/>
+            <path d="M12 9v4l2.5 1.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+            <rect x="10" y="3" width="4" height="3" rx="1" fill="#F97316"/>
+          </svg>
+          <span id="hud-timer">03:00</span>
+        </div>
+        <div class="pill-diff" id="pill-diff">
+          <span class="diff-icon" id="diff-icon">😈</span>
+          <span class="diff-text" id="diff-text">HARD</span>
+        </div>
+      </div>
+      <div id="hud-coins">
+        <span class="coin-icon">🪙</span>
+        <span id="coin-val">0</span>
+      </div>
+    </div>
+    <div id="settings-panel" class="hidden">
+      <div class="panel-card">
+        <h2>설정</h2>
+        <label class="toggle-row"><span>소리</span><input type="checkbox" id="toggle-sound" checked /></label>
+        <label class="toggle-row"><span>진동</span><input type="checkbox" id="toggle-haptic" checked /></label>
+        <button id="btn-restart" class="panel-btn">다시하기</button>
+        <button id="btn-close-settings" class="panel-btn secondary">닫기</button>
+      </div>
+    </div>
+    <div id="win-overlay" class="hidden">
+      <div class="win-card">
+        <div class="win-title">완료!</div>
+        <div class="win-sub">Level <span id="win-level">1</span></div>
+        <div class="win-coins">+<span id="win-coins">50</span> 🪙</div>
+        <button id="btn-next" class="panel-btn">다음 레벨</button>
+      </div>
+    </div>
+    <div id="fail-overlay" class="hidden">
+      <div class="win-card">
+        <div class="win-title">시간 초과</div>
+        <button id="btn-retry" class="panel-btn">다시하기</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="js/main.js?v=scale1"></script>
+</body>
+</html>
