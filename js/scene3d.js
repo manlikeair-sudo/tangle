@@ -431,7 +431,7 @@ export class Scene3D {
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
       normalMap: nrm,
-      normalScale: new THREE.Vector2(1.15, 1.15),
+      normalScale: new THREE.Vector2(0.62, 0.62),
       color: 0xffffff,
       roughness: 0.40,
       metalness: 0.0,
@@ -564,19 +564,20 @@ export class Scene3D {
   }
 
 
-  /** Flat-color seals for open TubeGeometry ends — never braid (that looked like sunburst on caps). */
+  /** Solid flat plugs that close open TubeGeometry mouths (no hollow cut ends). */
   _ensureTubeEndCaps(entry, color) {
     const flatMat = () => new THREE.MeshStandardMaterial({
       color: new THREE.Color(color.hex),
-      roughness: 0.55,
+      roughness: 0.48,
       metalness: 0.0,
-      emissive: new THREE.Color(color.hex).multiplyScalar(0.06),
+      emissive: new THREE.Color(color.hex).multiplyScalar(0.07),
+      side: THREE.DoubleSide,
     });
     if (!entry.endCaps) {
       const mk = () => {
-        const m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), flatMat());
+        const m = new THREE.Mesh(new THREE.CircleGeometry(1, 28), flatMat());
         m.castShadow = false;
-        m.renderOrder = 9; // under magnet caps (12)
+        m.renderOrder = 10;
         this.scene.add(m);
         return m;
       };
@@ -642,7 +643,7 @@ export class Scene3D {
     // Attach near resting height (under the magnet disc) — no tall pipe rise.
     // Centerline must clear floor by ≥ ropeR so the full round tube is visible
     // (floorY≈ropeR*1.02 buried the lower half → flat "ribbon" look from above)
-    const floorY = this.ropeR * 1.12; // heavy sit without burying half the tube
+    const floorY = this.ropeR * 1.28; // keep full round tube above floor (no flat-stick)
     const attachYPeg = Math.max(this.ropeR * 1.5, this.pegH * 0.88);
     const attachYFloor = Math.max(this.floorCapY() * 0.85, this.ropeR * 1.35);
     // Dragged/lifted caps sit high — rope must meet the underside of that cap (not floor)
@@ -758,7 +759,7 @@ export class Scene3D {
       }
       const layer = Math.min(3, (rs.z || i) % 4);
       // Rest on floor; stacking only via crossing lifts (~1 rope thickness)
-      const baseY = this.ropeR * 1.12;
+      const baseY = this.ropeR * 1.28;
       const srcPts = (rs.points && rs.points.length >= 2) ? rs.points : rs._wrapPath;
       if (!srcPts || srcPts.length < 2) { built.push(null); continue; }
       const stretch = rs.stretch || 1;
@@ -783,11 +784,11 @@ export class Scene3D {
             // Soft stacked contact — upper rope rests on lower with gentle height
             const liftAmt = 2 * this.ropeR * Math.max(1, stack) * 1.05;
             const influence = this.ropeR * 5.0;
-            for (let k = 0; k < A.length; k++) {
+            for (let k = 1; k < A.length - 1; k++) { // never lift endpoints off magnet caps
               const d = Math.hypot(A[k].x - hit.x, A[k].z - hit.z);
               if (d < influence) {
                 const t = d / influence;
-                const w = (1 - t) * (1 - t) * (1 + 2 * t); // smootherstep-ish
+                const w = (1 - t) * (1 - t) * (1 + 2 * t);
                 lifts[hi][k] = Math.max(lifts[hi][k], liftAmt * w);
               }
             }
@@ -796,9 +797,17 @@ export class Scene3D {
       }
     }
 
+    // Hard-pin: tube ends always meet caps (crossing lift must not float open mouths)
+    for (const L of lifts) {
+      if (!L || L.length < 2) continue;
+      L[0] = 0;
+      L[L.length - 1] = 0;
+    }
+
     for (let i = 0; i < ropeStates.length; i++) {
       const rs = ropeStates[i];
       const entry = this.ropes[i];
+      // Retract complete → hide everything together
       if (rs.clearing && rs.clearT > 0.55) {
         entry.mesh.visible = false;
         this.caps[i * 2].visible = false;
@@ -806,36 +815,38 @@ export class Scene3D {
         if (entry.endCaps) for (const s of entry.endCaps) s.visible = false;
         continue;
       }
-      // Retract: shrink toward one end
-      if (rs.clearing && rs.retracting) {
-        entry.mesh.visible = rs.clearT < 0.85;
-      } else {
-        entry.mesh.visible = true;
-      }
+      entry.mesh.visible = true;
       const b = built[i];
       if (!b || b.worldPts.length < 2) continue;
 
+      // Retract: shrink evenly toward midpoint (round tube, caps travel with ends)
+      const RETRACT_VIS = 0.32;
       let scale = 1;
+      let retractPull = 0;
       if (rs.clearing && rs.retracting) {
-        const tt = Math.min(1, rs.clearT / 0.2);
-        scale = 1 - tt * 0.95;
-        entry.mesh.material.opacity = 1 - tt * 0.5;
-        entry.mesh.material.transparent = true;
+        retractPull = Math.min(1, rs.clearT / RETRACT_VIS);
+        scale = retractPull < 0.72 ? 1.0 : (1.0 - (retractPull - 0.72) / 0.28 * 0.85);
+        entry.mesh.material.opacity = retractPull < 0.65 ? 1 : (1 - (retractPull - 0.65) / 0.35);
+        entry.mesh.material.transparent = entry.mesh.material.opacity < 0.99;
       } else {
         entry.mesh.material.transparent = false;
         entry.mesh.material.opacity = 1;
       }
 
+      const nWP = b.worldPts.length;
+      const mid = new THREE.Vector3();
+      for (const p of b.worldPts) mid.add(p);
+      mid.multiplyScalar(1 / nWP);
       const pts = b.worldPts.map((p, k) => {
         let y = (p.y + (lifts[i] ? lifts[i][k] : 0));
-        if (rs.clearing && rs.retracting) {
-          const t = k / (b.worldPts.length - 1);
-          const pull = Math.min(1, rs.clearT / 0.2);
-          const target = b.worldPts[b.worldPts.length - 1];
+        if (retractPull > 0) {
+          const t = k / (nWP - 1);
+          const endW = Math.min(t, 1 - t) * 2;
+          const pull = retractPull * (1 - endW * 0.15);
           return new THREE.Vector3(
-            p.x + (target.x - p.x) * pull * (1 - t),
-            y * (1 - pull * 0.3),
-            p.z + (target.z - p.z) * pull * (1 - t)
+            p.x + (mid.x - p.x) * pull,
+            y + (mid.y - y) * pull * 0.85,
+            p.z + (mid.z - p.z) * pull
           );
         }
         return new THREE.Vector3(p.x, y, p.z);
@@ -847,6 +858,61 @@ export class Scene3D {
           for (let k = 1; k < pts.length - 1; k++) {
             pts[k].y = ys[k] * 0.5 + (ys[k - 1] + ys[k + 1]) * 0.25;
           }
+        }
+      }
+
+      // Sleeping + stable ends → keep last mesh (no fillet/sparsify flicker)
+      if (rs._sleeping && entry._sleepGeomOk && entry.geom) {
+        const ends = b.ends;
+        const key = `${ends[0].x|0}_${ends[0].y|0}_${ends[1].x|0}_${ends[1].y|0}`;
+        if (entry._sleepKey === key) {
+          entry.mesh.visible = true;
+          // Caps + mouth plugs while sleeping (geom frozen, but seals must stay closed)
+          const sealsSleep = this._ensureTubeEndCaps(entry, rs.color);
+          for (let e = 0; e < 2; e++) {
+            let mesh = this.caps[i * 2 + e];
+            const ep = b.ends[e];
+            if (!mesh || mesh.userData.colorHex !== rs.color.hex) {
+              if (mesh) this.scene.remove(mesh);
+              mesh = this._makeCapMesh(rs.color);
+              this.scene.add(mesh);
+              this.caps[i * 2 + e] = mesh;
+            }
+            const isDragged = dragInfo && dragInfo.ropeId === rs.id && dragInfo.end === e;
+            const attach = entry._end0 && entry._end1
+              ? (e === 0 ? entry._end0 : entry._end1)
+              : b.worldPts[e === 0 ? 0 : b.worldPts.length - 1];
+            const inner = entry._end0 && entry._end1
+              ? (e === 0
+                  ? (entry._end1.clone().lerp(entry._end0, 0.92))
+                  : (entry._end0.clone().lerp(entry._end1, 0.92)))
+              : b.worldPts[Math.min(1, b.worldPts.length - 1)];
+            if (isDragged) {
+              this._dragRopeIndex = i;
+              this._dragEnd = e;
+              const topY = (ep && ep.onFloor) ? this.floorCapY() : this.pegH;
+              mesh.visible = false;
+              mesh.position.set(attach.x, topY, attach.z);
+              sealsSleep[e].visible = false;
+              continue;
+            }
+            mesh.visible = true;
+            mesh.renderOrder = 12;
+            const topY = ep.onFloor ? this.floorCapY() : this.pegH;
+            mesh.position.set(attach.x, topY, attach.z);
+            mesh.scale.set(1, 1, 1);
+            // Plug open mouth under the magnet
+            const dir = new THREE.Vector3().subVectors(inner, attach);
+            if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1); else dir.normalize();
+            const rad = (entry.geom && entry.geom.parameters && entry.geom.parameters.radius) || this.ropeR;
+            sealsSleep[e].position.copy(attach).addScaledVector(dir, rad * 0.02);
+            sealsSleep[e].scale.setScalar(rad * 1.02);
+            sealsSleep[e].lookAt(attach.clone().add(dir));
+            sealsSleep[e].visible = true;
+            sealsSleep[e].material.transparent = false;
+            sealsSleep[e].material.opacity = 1;
+          }
+          continue;
         }
       }
 
@@ -888,20 +954,16 @@ export class Scene3D {
         filleted = (filleted || []).filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
         if (filleted.length < 2) filleted = sparse.slice();
         // HARD-PIN mesh ends to cap attach points (authoritative). Caps never float off.
+        // Endpoints are cap-owned — never add crossing lift here
         const cap0 = b.worldPts[0].clone();
         const cap1 = b.worldPts[b.worldPts.length - 1].clone();
-        // Apply same crossing lifts at ends if any
-        if (lifts[i]) {
-          cap0.y += lifts[i][0] || 0;
-          cap1.y += lifts[i][lifts[i].length - 1] || 0;
-        }
         // Pin near caps but inset slightly so open tube face sits under the solid disc (not in dark recess)
         const insetEnd = (end, inward) => {
           const d = new THREE.Vector3().subVectors(inward, end);
           if (d.lengthSq() < 1e-8) return end.clone();
           d.normalize();
-          // Past dark recess (~0.37*capR) so open braid face sits under solid colored ring
-          return end.clone().addScaledVector(d, Math.max(this.ropeR * 0.85, this.capR * 0.55));
+          // Tiny inset; solid seal plugs close the mouth so rim never reads as a hollow cut
+          return end.clone().addScaledVector(d, Math.min(this.ropeR * 0.22, this.capR * 0.18));
         };
         const inner0 = filleted[Math.min(1, filleted.length - 1)];
         const inner1 = filleted[Math.max(0, filleted.length - 2)];
@@ -949,31 +1011,39 @@ export class Scene3D {
         entry._end0 = (entry._attach0 || filleted[0]).clone();
         entry._end1 = (entry._attach1 || filleted[filleted.length - 1]).clone();
         entry.colorHex = rs.color.hex;
+        if (rs._sleeping) {
+          const ends = b.ends;
+          entry._sleepKey = `${ends[0].x|0}_${ends[0].y|0}_${ends[1].x|0}_${ends[1].y|0}`;
+          entry._sleepGeomOk = true;
+        } else {
+          entry._sleepGeomOk = false;
+        }
         // Seals fully under magnet caps — never visible on top (no braid sunburst)
         const seals = this._ensureTubeEndCaps(entry, rs.color);
-        const sealR = radius * 0.85;
+        const sealR = radius * 1.02;
         for (let ei = 0; ei < 2; ei++) {
           const p = ei === 0 ? filleted[0] : filleted[filleted.length - 1];
           const q = ei === 0 ? filleted[Math.min(1, filleted.length - 1)] : filleted[Math.max(0, filleted.length - 2)];
           const dir = new THREE.Vector3().subVectors(q, p);
           if (dir.lengthSq() > 1e-8) dir.normalize();
-          const capMesh = this.caps[i * 2 + ei];
-          const coveredByDrag = this.dragCap && this.dragCap.visible
-            && this._dragRopeIndex === i && this._dragEnd === ei;
-          const covered = (capMesh && capMesh.visible) || coveredByDrag;
-          const capY = coveredByDrag ? this.dragCap.position.y
-            : (capMesh && capMesh.visible ? capMesh.position.y : (p.y + this.capH * 0.12));
-          seals[ei].position.copy(p).addScaledVector(dir, radius * 0.4);
-          seals[ei].position.y = Math.min(seals[ei].position.y, capY - sealR - this.capH * 0.05);
+          else dir.set(0, 0, 1);
+          seals[ei].position.copy(p).addScaledVector(dir, radius * 0.02);
           seals[ei].scale.setScalar(sealR);
-          // Never show seals on top of caps — disc covers the open tube
-          seals[ei].visible = false;
+          seals[ei].lookAt(p.clone().add(dir));
+          seals[ei].visible = !(rs.clearing && rs.clearT > 0.5);
+          if (entry.mesh.material.opacity < 1) {
+            seals[ei].material.transparent = true;
+            seals[ei].material.opacity = entry.mesh.material.opacity;
+          } else {
+            seals[ei].material.transparent = false;
+            seals[ei].material.opacity = 1;
+          }
         }
         try {
           const len = curve.getLength();
-          // free1 uses period 1.8*D; nudge slightly denser so stripes match visual density
-          const period = 1.35 * (2 * this.ropeR); // denser than free1 period for finer stripes
-          const uRepeat = Math.max(3, (len / period) * (stretch > 1.1 ? Math.pow(stretch, 0.28) : 1));
+          // free1 period — denser repeats looked like stacked rings
+          const period = 1.8 * (2 * this.ropeR);
+          const uRepeat = Math.max(2, len / period);
           const mat = entry.mesh.material;
           for (const slot of ['map', 'normalMap']) {
             if (mat[slot]) {
@@ -1005,23 +1075,37 @@ export class Scene3D {
           mesh.position.set(attach.x, topY, attach.z);
           continue;
         }
-        if (rs.clearing && rs.clearT > 0.15) {
+        if (rs.clearing && rs.clearT > 0.55) {
           mesh.visible = false;
           continue;
         }
         mesh.visible = true;
         mesh.renderOrder = 12;
-        // Cap sits on the rope mesh endpoint (authoritative pin)
-        const attach = b.worldPts[e === 0 ? 0 : b.worldPts.length - 1];
+        const attach = (pts && pts.length >= 2)
+          ? pts[e === 0 ? 0 : pts.length - 1]
+          : b.worldPts[e === 0 ? 0 : b.worldPts.length - 1];
         let sy = 1, sxz = 1;
-        if (ep.squash && ep.squash !== 1) {
+        if (ep && ep.squash && ep.squash !== 1 && !(rs.clearing && rs.retracting)) {
           sy = ep.squash;
           sxz = 1 + (1 - sy) * 0.4;
         }
-        // Cap rests like free1/helix24: peg-top or floor height (clean disc, not rope-sliced)
-        const topY = ep.onFloor ? this.floorCapY() : this.pegH;
-        mesh.position.set(attach.x, topY, attach.z);
-        mesh.scale.set(sxz, sy, sxz);
+        if (rs.clearing && rs.retracting) {
+          const fade = Math.max(0.2, 1 - Math.max(0, rs.clearT - 0.18) / 0.4);
+          mesh.position.set(attach.x, attach.y, attach.z);
+          mesh.scale.set(sxz * fade, sy * fade, sxz * fade);
+          if (mesh.material) {
+            mesh.material.transparent = fade < 0.99;
+            mesh.material.opacity = fade;
+          }
+        } else {
+          const topY = ep.onFloor ? this.floorCapY() : this.pegH;
+          mesh.position.set(attach.x, topY, attach.z);
+          mesh.scale.set(sxz, sy, sxz);
+          if (mesh.material) {
+            mesh.material.transparent = false;
+            mesh.material.opacity = 1;
+          }
+        }
       }
     }
   }

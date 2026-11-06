@@ -52,3 +52,43 @@ export function ropeIsCrossed(ropeIndex, ropeStates, getPolyline, getEndPegs, ig
   }
   return false;
 }
+
+
+/** Chord-based topology cross (ignores sim sag/jitter). End-margins only via t/u. */
+export function chordsCross(a0, a1, b0, b1) {
+  return !!segIntersect(a0, a1, b0, b1);
+}
+
+/**
+ * Logical clear test: do end-to-end chords of rope i cross any other active rope?
+ * Uses peg/floor end positions — NOT noisy verlet midpoints.
+ */
+export function ropeIsCrossedLogical(ropeIndex, ropeStates, getEnds) {
+  const rs = ropeStates[ropeIndex];
+  if (!rs || rs.clearing) return false;
+  const endsA = getEnds(rs.id);
+  if (!endsA || endsA.length < 2) return false;
+  const a0 = { x: endsA[0].x, y: endsA[0].y };
+  const a1 = { x: endsA[1].x, y: endsA[1].y };
+  for (let j = 0; j < ropeStates.length; j++) {
+    if (j === ropeIndex) continue;
+    const other = ropeStates[j];
+    if (!other || other.clearing) continue;
+    const endsB = getEnds(other.id);
+    if (!endsB || endsB.length < 2) continue;
+    const b0 = { x: endsB[0].x, y: endsB[0].y };
+    const b1 = { x: endsB[1].x, y: endsB[1].y };
+    if (chordsCross(a0, a1, b0, b1)) return true;
+  }
+  return false;
+}
+
+
+/**
+ * Visible clear test: settled floor-plane centerline polylines (what the player sees).
+ * Any overlap with another non-cleared rope ⇒ not free. Skipping clearing ropes
+ * lets a legit cascade happen after the removed rope is gone.
+ */
+export function ropeIsCrossedVisible(ropeIndex, ropeStates, getPolyline, getEndPegs, ignoreR) {
+  return ropeIsCrossed(ropeIndex, ropeStates, getPolyline, getEndPegs, ignoreR, null);
+}

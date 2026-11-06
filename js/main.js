@@ -1,9 +1,9 @@
 import { AudioBus } from './audio.js';
 import { generateLevel, LEVEL_COUNT } from './levels.js';
-import { makeRopeState, initPoints, simulateRope, impulseWobble, springKick, wrapPolyline, captureRest } from './rope.js';
+import { makeRopeState, initPoints, simulateRope, impulseWobble, springKick, wrapPolyline, captureRest, wakeRope } from './rope.js';
 import { Scene3D } from './scene3d.js';
 import { Particles } from './particles2d.js';
-import { ropeIsCrossed } from './crossing.js';
+import { ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
 
 const canvas = document.getElementById('game');
 const fxCanvas = document.getElementById('fx');
@@ -33,6 +33,15 @@ let PEG_R = 28, CAP_R = 34, ROPE_W = 28, SNAP_DIST = 56;
 // Optional gentle peg assist when releasing very near an empty peg
 let PEG_ASSIST_R = 50;
 const FREE_DELAY = 0.5;
+/** Clear only after a player move settles — never on idle / level start. */
+let clearArmed = false;
+let clearSettleT = 0;
+let clearArmedAt = 0; // performance.now() when armed — wall-clock settle/free (rAF-throttle safe)
+let nextClearAllowedAt = 0; // stagger cascades: one pop at a time
+let lastTouchedRopeId = null; // only touched / cascade-eligible ropes may clear
+const CASCADE_GAP = 0.4; // seconds after pop before next clear may start
+const CLEAR_SETTLE_NEED = 0.35; // wait after action before counting freeT
+
 const RETRACT_DUR = 0.2;
 const SNAP_DUR = 0.07; // 70 ms ease-in snap to floor/peg
 const LIFT_DUR = 0.08; // magnetic pop lift
@@ -121,6 +130,16 @@ function loadLevel(idx) {
   dragging = null;
   snapAnims = [];
   pegDips = [];
+  clearArmed = false;
+  clearSettleT = 0;
+  clearArmedAt = 0;
+  nextClearAllowedAt = 0;
+  lastTouchedRopeId = null;
+  for (const rs of ropeStates) {
+    rs.freeT = 0; rs._freeSince = null; rs._playerTouched = false; rs._cascadeEligible = false;
+    rs._sleeping = false;
+    rs._stillFrames = 0;
+  }
   document.getElementById('hud-level').textContent = String(idx + 1);
   document.getElementById('win-overlay').classList.add('hidden');
   document.getElementById('fail-overlay').classList.add('hidden');
@@ -479,7 +498,10 @@ function onDown(e) {
   if (rs) {
     rs.z = Math.max(...ropeStates.map(r => r.z || 0)) + 1;
     rs._dragging = true;
+    wakeRope(rs);
     rs.freeT = 0;
+    lastTouchedRopeId = g.ropeId;
+    rs._playerTouched = true;
     // Capture rest length at grab for stretch limit
     const ends = endPositions(rs.id);
     if (ends) {
@@ -538,6 +560,7 @@ function onUp(e) {
     springKick(rs, 0.75 + Math.min(0.7, releaseTension * 0.75));
     impulseWobble(rs, 0.95 + Math.min(0.7, releaseTension * 0.7));
     audio.boing(Math.min(1.0, 0.25 + releaseTension * 0.8));
+    armClearCheck();
   }
 
   snapAnims.push({
@@ -586,16 +609,46 @@ function finishSnap(anim) {
   if (rs) {
     // Soft secondary settle pulse after landing squash
     springKick(rs, 0.35);
+    lastTouchedRopeId = rs.id;
+    rs._playerTouched = true;
   }
   audio.snap();
   haptic(14);
-  evaluateFrees();
+  armClearCheck();
 }
 
 function getPolyline(rs) {
   if (rs._wrapPath && rs._wrapPath.length >= 2) return rs._wrapPath;
   if (rs.points) return rs.points.map(p => ({ x: p.x, y: p.y }));
   return null;
+}
+
+/** Settled floor-plane centerline — what the player sees (prefer frozen sleep pose). */
+function getSettledPolyline(rs) {
+  if (!rs || rs.clearing) return null;
+  if (rs.points && rs.points.length >= 2) {
+    // Sleeping or calm: use verlet midpoints (matches drawn sag/curve)
+    if (rs._sleeping || (rs.wobble || 0) < 0.08 || (rs._stillFrames || 0) > 8) {
+      return rs.points.map(p => ({ x: p.x, y: p.y }));
+    }
+  }
+  if (rs._wrapPath && rs._wrapPath.length >= 2) {
+    return rs._wrapPath.map(p => ({ x: p.x, y: p.y }));
+  }
+  if (rs.points && rs.points.length >= 2) {
+    return rs.points.map(p => ({ x: p.x, y: p.y }));
+  }
+  // Fallback chord only if no path yet
+  const ends = endPositions(rs.id);
+  if (!ends || ends.length < 2) return null;
+  return [{ x: ends[0].x, y: ends[0].y }, { x: ends[1].x, y: ends[1].y }];
+}
+
+function ropeVisuallyCrossed(i) {
+  return ropeIsCrossedVisible(
+    i, ropeStates, getSettledPolyline, getEndPegs,
+    PEG_R * 0.95
+  );
 }
 
 function getEndPegs(rs) {
@@ -609,21 +662,28 @@ function getEndPegs(rs) {
   return out;
 }
 
+function armClearCheck() {
+  clearArmed = true;
+  clearSettleT = 0;
+  clearArmedAt = performance.now();
+  for (const rs of ropeStates) {
+    if (!rs.clearing) rs.freeT = 0;
+  }
+}
+
+/** Topology polyline = end-to-end chord (no sim sag). */
+function getLogicalEnds(ropeId) {
+  return endPositions(ropeId);
+}
+
 function evaluateFrees() {
-  const ignoreR = PEG_R * 1.6;
-  const draggedId = dragging ? dragging.ropeId : null;
+  // Manual/debug: same logical test, but do not start clears unless armed+settled
+  if (!clearArmed || dragging || snapAnims.length) return;
   for (let i = 0; i < ropeStates.length; i++) {
     const rs = ropeStates[i];
     if (rs.clearing) continue;
-    if (draggedId != null && rs.id === draggedId) { rs.freeT = 0; continue; }
-    // Skip if an end is mid-snap
-    if (snapAnims.some(a => a.ropeId === rs.id)) { rs.freeT = 0; continue; }
-    const crossed = ropeIsCrossed(i, ropeStates, getPolyline, getEndPegs, ignoreR, draggedId);
-    if (!crossed) {
-      // free
-    } else {
-      rs.freeT = 0;
-    }
+    const crossed = ropeVisuallyCrossed(i);
+    if (crossed) rs.freeT = 0;
   }
 }
 
@@ -631,6 +691,15 @@ function startClear(rs) {
   rs.clearing = true;
   rs.clearT = 0;
   rs.retracting = true;
+  rs._clearStartedAt = performance.now();
+  // Stagger: next rope may clear only after this pop finishes + CASCADE_GAP
+  nextClearAllowedAt = performance.now() + (RETRACT_DUR + CASCADE_GAP) * 1000;
+  // Legit cascade: other ropes that are now visually free (this was their only crosser)
+  for (let i = 0; i < ropeStates.length; i++) {
+    const o = ropeStates[i];
+    if (o.clearing || o.id === rs.id) continue;
+    if (!ropeVisuallyCrossed(i)) o._cascadeEligible = true;
+  }
   // Remove both caps from pegs
   for (const peg of pegs) {
     peg.stack = peg.stack.filter(c => c.ropeId !== rs.id);
@@ -775,8 +844,7 @@ function tick(ts) {
     }
   }
 
-  // Free-rope timer + clear
-  const ignoreR = PEG_R * 1.6;
+  // Free-rope timer + clear — VISIBLE settled polylines, after player action + settle
   const draggedId = dragging ? dragging.ropeId : null;
   for (let i = 0; i < ropeStates.length; i++) {
     const rs = ropeStates[i];
@@ -791,14 +859,49 @@ function tick(ts) {
       }
       continue;
     }
-    if (draggedId != null && rs.id === draggedId) { rs.freeT = 0; continue; }
-    if (snapAnims.some(a => a.ropeId === rs.id)) { rs.freeT = 0; continue; }
-    const crossed = ropeIsCrossed(i, ropeStates, getPolyline, getEndPegs, ignoreR, draggedId);
-    if (!crossed) {
-      rs.freeT = (rs.freeT || 0) + dt;
-      if (rs.freeT >= FREE_DELAY) startClear(rs);
-    } else {
-      rs.freeT = 0;
+  }
+  if (clearArmed && !dragging && snapAnims.length === 0) {
+    const now = performance.now();
+    const armedSec = Math.max(0, (now - (clearArmedAt || now)) / 1000);
+    clearSettleT = armedSec;
+    // One clear at a time: wait until pop finishes + CASCADE_GAP (readable cause→effect)
+    const clearingBusy = ropeStates.some(r => r.clearing && !r._popped);
+    const staggerBlocked = now < nextClearAllowedAt || clearingBusy;
+    if (armedSec >= CLEAR_SETTLE_NEED) {
+      // Prefer the rope the player just moved (highest z) among free candidates
+      let best = null;
+      for (let i = 0; i < ropeStates.length; i++) {
+        const rs = ropeStates[i];
+        if (rs.clearing) continue;
+        const crossed = ropeVisuallyCrossed(i);
+        if (!crossed) {
+          // Never auto-clear a rope the player never touched unless a cascade freed it
+          if (!(rs._playerTouched || rs._cascadeEligible)) {
+            rs.freeT = 0; rs._freeSince = null;
+            continue;
+          }
+          if (rs._freeSince == null) rs._freeSince = now;
+          rs.freeT = (now - rs._freeSince) / 1000;
+          if (rs.freeT >= FREE_DELAY && !ropeVisuallyCrossed(i)) {
+            // Prefer the rope the player just moved; then cascade eligibles by z
+            const prefer = (rs.id === lastTouchedRopeId) ? 1000 : 0;
+            const score = prefer + (rs.z || 0);
+            if (!best || score >= best.score) best = { i, rs, score };
+          }
+        } else {
+          rs.freeT = 0;
+          rs._freeSince = null;
+        }
+      }
+      if (best && !staggerBlocked) {
+        startClear(best.rs);
+      }
+    }
+  } else if (dragging || snapAnims.length) {
+    clearSettleT = 0;
+    clearArmedAt = performance.now();
+    for (const rs of ropeStates) {
+      if (!rs.clearing) { rs.freeT = 0; rs._freeSince = null; }
     }
   }
 
@@ -838,7 +941,7 @@ function tick(ts) {
     } else {
       const ends = endPositions(rs.id);
       if (!ends) continue;
-      rs._wrapPath = wrapPolyline(ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R + ROPE_W * 0.85 + 8);
+      rs._wrapPath = wrapPolyline(ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, PEG_R * 0.95 + 8);
     }
   }
   const dragInfo = dragging ? { ropeId: dragging.ropeId, end: dragging.end } : null;
@@ -932,7 +1035,7 @@ function dragCapToPeg(fromPegId, toPegId) {
     impulseWobble(rs, 0.8);
   }
   audio.snap();
-  evaluateFrees();
+  armClearCheck();
   return true;
 }
 
@@ -965,6 +1068,12 @@ function placeCapAt(ropeId, end, x, y) {
 
 window.__tangle = {
   loadLevel, pegs: () => pegs, ropes: () => ropeStates,
+  clearArmed: () => clearArmed, armClearCheck,
+  isCrossedLogical: (i) => ropeIsCrossedLogical(i, ropeStates, getLogicalEnds),
+  isCrossedVisible: (i) => ropeVisuallyCrossed(i),
+  getSettledPolyline: (id) => { const rs = ropeStates.find(r => r.id === id); return getSettledPolyline(rs); },
+  nextClearAllowedAt: () => nextClearAllowedAt,
+  startClearById: (id) => { const rs = ropeStates.find(r => r.id === id); if (rs && !rs.clearing) startClear(rs); },
   dragCapToPeg, dragRingToPeg: dragCapToPeg, placeCapAt,
   flushSnaps: () => {
     const pending = snapAnims.splice(0);
