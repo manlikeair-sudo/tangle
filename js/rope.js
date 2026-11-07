@@ -145,8 +145,36 @@ export function initPoints(rs, ax, ay, bx, by, pegs, clearance) {
   rs.elasticRest = Math.max(chord * 1.35, total * 0.98, 90);
   rs.stretch = chord / rs.elasticRest;
   rs._accum = 0;
+  rs._alpha = 1;
+  rs._stillTime = 0;
+  rs._sBiasBaked = true;
+  rs._prevPts = pts.map(p => ({ x: p.x, y: p.y }));
+  rs._framePts = pts.map(p => ({ x: p.x, y: p.y }));
   rs._lastA = { x: ax, y: ay };
   rs._lastB = { x: bx, y: by };
+}
+
+/** Render pose: blend the previous physics step toward the latest one.
+ *  Ends stay live so a dragged cap remains 1:1. */
+export function displayPoints(rs) {
+  const curr = rs && rs.points;
+  if (!curr) return null;
+  const prev = rs._prevPts;
+  const a = (rs._sleeping || !prev || prev.length !== curr.length) ? 1 : (rs._alpha ?? 1);
+  if (a >= 0.999) return curr;
+  const out = new Array(curr.length);
+  for (let i = 0; i < curr.length; i++) {
+    if (i === 0 || i === curr.length - 1) {
+      out[i] = curr[i];
+    } else {
+      const q = prev[i];
+      out[i] = {
+        x: q.x + (curr[i].x - q.x) * a,
+        y: q.y + (curr[i].y - q.y) * a,
+      };
+    }
+  }
+  return out;
 }
 
 function pathLen(pts) {
@@ -180,48 +208,40 @@ function stepOnce(rs, ax, ay, bx, by, pegs, clearance, dt) {
     }
   }
 
-  // Verlet: during drag mid-rope lags (inertia); settled = heavy soft drape
-  // Ref (~Ropeland): finger nearly 1:1, body follows with soft lag; settle ~0.5–0.65s
-  const damp = rs._dragging ? 0.968 : (rs.wobble > 0.12 ? 0.982 : 0.94);
-  // Heavy sag while settling; taper gravity as we approach sleep (stops perpetual fight)
-  let g = rs._dragging ? 280 : 1100;
-  if (!rs._dragging && (rs._stillFrames || 0) > 12) g = 0; // fully quiet near sleep
-  else if (!rs._dragging && (rs._stillFrames || 0) > 6) g *= 0.08;
-  else if (!rs._dragging && (rs.wobble || 0) < 0.08) g *= 0.45;
+  // Drag keeps soft inertia (rubber lag). Release keeps a fraction of the
+  // constraint motion — enough for one small hump, not a traveling wave.
+  const dragging = !!rs._dragging;
+  const damp = dragging ? 0.972 : 0.62;
+  const g = dragging ? 220 : 680;
   for (let i = 1; i < n - 1; i++) {
     const p = pts[i];
     let vx = (p.x - p.ox) * damp;
     let vy = (p.y - p.oy) * damp;
+    if (!dragging) {
+      const sp = Math.hypot(vx, vy);
+      const cap = 6;
+      if (sp > cap) { vx *= cap / sp; vy *= cap / sp; }
+    }
     p.ox = p.x; p.oy = p.y;
     p.x += vx;
     p.y += vy + g * dt * dt;
   }
 
-  // One-shot S-bias while settling (NOT every frame forever — that fights constraints → 부들부들)
-  const chord = Math.hypot(bx - ax, by - ay);
-  const ratio = chord / Math.max(1, rest);
-  if (!rs._dragging && !rs._sBiasBaked && rs.wobble < 0.2 && ratio < 0.96) {
-    const dx = bx - ax, dy = by - ay;
-    const len = chord || 1;
-    const nx = -dy / len, ny = dx / len;
-    const seed = (rs.id || 0) * 1.7;
-    const amp = Math.min(chord * 0.38, Math.max(0, rest - chord) * 0.28);
-    for (let i = 1; i < n - 1; i++) {
-      const t = i / (n - 1);
-      const sCurve = Math.sin(t * Math.PI * 2 + seed) * Math.sin(t * Math.PI);
-      pts[i].x += nx * sCurve * amp * dt * 2.2;
-      pts[i].y += ny * sCurve * amp * dt * 2.2;
-    }
-  }
-
-  // Soft rubber while dragged; settle soft-heavy (not stiff plastic)
-  const stiffness = rs._dragging ? 0.22 : (rs.wobble > 0.2 ? 0.28 : 0.36);
-  const iters = rs._dragging ? 4 : (rs.wobble > 0.15 ? 5 : 6);
+  // Soft rubber while dragged; a bit firmer once the finger stops.
+  const stiffness = dragging ? 0.22 : 0.5;
+  const iters = dragging ? 4 : 6;
   for (let it = 0; it < iters; it++) {
     for (let i = 0; i < n - 1; i++) {
       const a = pts[i], b = pts[i + 1];
       let dx = b.x - a.x, dy = b.y - a.y;
-      let d = Math.hypot(dx, dy) || 1e-4;
+      let d = Math.hypot(dx, dy);
+      // A collapsed segment has no direction, so the solver thrashes the
+      // point beside the pin forever. Open it along the chord.
+      if (d < segRest * 0.25) {
+        const cdx = bx - ax, cdy = by - ay;
+        const cl = Math.hypot(cdx, cdy) || 1;
+        if (d < 1e-3) { dx = cdx / cl; dy = cdy / cl; d = 1e-3; }
+      }
       // Nonlinear spring: stretch harder beyond rest (rubber)
       const strain = (d - segRest) / segRest;
       const k = stiffness * (1 + Math.max(0, Math.min(2, strain)) * 0.7);
@@ -253,8 +273,9 @@ function stepOnce(rs, ax, ay, bx, by, pegs, clearance, dt) {
         }
       }
     }
-    // Min bend radius — prevent kinked self-overlapping folds
-    const minBendR = Math.max(segRest * 1.55, clearance * 1.2);
+    // Min bend radius — stop hairpin kinks without demanding a radius the
+    // short segments can never satisfy (that fight was a permanent orbit).
+    const minBendR = Math.max(segRest * 1.25, Math.min(26, clearance * 0.35));
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 1; i < n - 1; i++) {
         const a = pts[i - 1], b = pts[i], c = pts[i + 1];
@@ -275,38 +296,37 @@ function stepOnce(rs, ax, ay, bx, by, pegs, clearance, dt) {
     pts[n - 1].x = bx; pts[n - 1].y = by;
   }
 
-  // Recoil — match ref: ~2 soft overshoots, settle ~0.55–0.7s (힐링)
-  if (rs.wobble > 0) {
-    const w = rs.wobble;
-    const nx = -(by - ay), ny = (bx - ax);
-    const nl = Math.hypot(nx, ny) || 1;
-    const phase = (rs._wobblePhase || 0);
+  // Drop most of the velocity the solver just created. While dragging we
+  // keep it, so the body lags the finger. At rest it would otherwise orbit.
+  if (!dragging) {
+    const keep = 0.22;
     for (let i = 1; i < n - 1; i++) {
-      const t = i / (n - 1);
-      const envelope = Math.sin(t * Math.PI);
-      // One soft lateral wave — not jittery high-freq
-      const wave = Math.sin(t * Math.PI * 1.4 + phase) * w * envelope;
-      pts[i].x += (nx / nl) * wave * 0.58;
-      pts[i].y += (ny / nl) * wave * 0.58;
+      const p = pts[i];
+      const vx = p.x - p.ox, vy = p.y - p.oy;
+      p.ox = p.x - vx * keep;
+      p.oy = p.y - vy * keep;
     }
-    rs._wobblePhase = phase + dt * 16; // ~2.5 Hz feel
-    rs.wobble = Math.max(0, w - dt * 1.55); // settle ~0.6s from amp~1
   }
+  rs.wobble = 0;
 }
 
 /**
  * Frame-rate independent spring sim. Returns wall-clock ms spent (for profiling).
  */
-const SLEEP_EPS = 3.5;       // px/frame — residual constraint fight sits under this
-const SLEEP_NEED = 16;       // ~0.25s calm → freeze
-const WAKE_END_MOVE = 1.5;   // px ends moved → wake
+const SLEEP_NEED = 16;       // legacy counter kept for debug readers
+const WAKE_END_MOVE = 0.8;   // px ends moved → wake
 
 export function wakeRope(rs) {
   if (!rs) return;
   rs._sleeping = false;
   rs._stillFrames = 0;
-  rs._sBiasBaked = false;
-  rs._calmSince = performance.now();
+  rs._stillTime = 0;
+  rs._awakeTime = 0;
+  rs._sBiasBaked = true;
+  if (rs.points) {
+    rs._prevPts = rs.points.map(p => ({ x: p.x, y: p.y }));
+    rs._alpha = 1;
+  }
 }
 
 export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
@@ -319,8 +339,9 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
   if (!rs._lastA) rs._lastA = { x: ax, y: ay };
   if (!rs._lastB) rs._lastB = { x: bx, y: by };
   const moved = Math.hypot(ax - rs._lastA.x, ay - rs._lastA.y) + Math.hypot(bx - rs._lastB.x, by - rs._lastB.y);
-  // Wake if ends moved (drag/snap/place) or actively dragging/wobbling
-  if (moved > WAKE_END_MOVE || rs._dragging || (rs.wobble || 0) > 0.02) {
+  // Wake only when an end actually moves or the player is dragging.
+  // Internal constraint velocity must not toggle sleep (that was the quiver).
+  if (moved > WAKE_END_MOVE || rs._dragging) {
     if (rs._sleeping) wakeRope(rs);
   }
   // Reseed only on large jumps (level load / teleport), blend to avoid pop
@@ -344,13 +365,8 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
     rs.elasticRest = Math.max(90, chord * 1.4);
   }
 
-  // Adapt rest only while awake & actively settling — freeze once calm (adaptation fights constraints → 부들부들)
-  if (!rs._sleeping && !rs._dragging && rs.wobble < 0.05 && (rs._stillFrames || 0) < 8) {
-    const chord = Math.hypot(bx - ax, by - ay);
-    const target = Math.max(90, Math.min(chord * 2.2, chord * 1.42));
-    rs.elasticRest += (target - rs.elasticRest) * Math.min(1, dt * 0.7);
-    if (rs.elasticRest > chord * 2.4 && chord > 40) rs.elasticRest = chord * 2.4;
-  }
+  // Rest length stays at the captured / wrapped length. Shrinking it toward
+  // the straight chord made tangled ropes crush into the pegs and orbit.
 
   // Sleeping: pin ends only, zero mid velocities, skip constraints (kills 부들부들)
   if (rs._sleeping && !rs._dragging) {
@@ -361,20 +377,30 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
       pts[i].oy = pts[i].y;
     }
     rs._accum = 0;
+    rs._alpha = 1;
+    if (rs._prevPts && rs._prevPts.length === n) {
+      for (let i = 0; i < n; i++) { rs._prevPts[i].x = pts[i].x; rs._prevPts[i].y = pts[i].y; }
+    }
     rs.stretch = Math.max(0.75, Math.min(2.4, (Math.hypot(bx - ax, by - ay) || 1) / Math.max(60, rs.elasticRest || 1)));
     rs._lastA = { x: ax, y: ay }; rs._lastB = { x: bx, y: by };
     return performance.now() - t0;
   }
 
-  // Fixed-dt accumulator — always take integer substeps (consistent order)
+  // Fixed-dt accumulator. prevPts is the state before the last substep so
+  // the renderer can blend across irregular iPad frame times.
+  if (!rs._prevPts || rs._prevPts.length !== n) {
+    rs._prevPts = pts.map(p => ({ x: p.x, y: p.y }));
+  }
   rs._accum = (rs._accum || 0) + Math.min(0.05, Math.max(0, dt));
   let steps = 0;
   while (rs._accum >= FIXED_DT && steps < MAX_SUBSTEPS) {
+    for (let i = 0; i < n; i++) { rs._prevPts[i].x = pts[i].x; rs._prevPts[i].y = pts[i].y; }
     stepOnce(rs, ax, ay, bx, by, pegs, clearance, FIXED_DT);
     rs._accum -= FIXED_DT;
     steps++;
   }
   if (rs._accum > FIXED_DT * 2) rs._accum = 0;
+  rs._alpha = Math.max(0, Math.min(1, (rs._accum || 0) / FIXED_DT));
 
   // Sanitize + rein in runaway midpoints BEFORE measuring stretch
   const chordSafe = Math.hypot(bx - ax, by - ay) || 1;
@@ -414,74 +440,83 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
   pts[0].x = ax; pts[0].y = ay; pts[0].ox = ax; pts[0].oy = ay;
   pts[n - 1].x = bx; pts[n - 1].y = by; pts[n - 1].ox = bx; pts[n - 1].oy = by;
 
-  // Sleep when midpoints nearly still OR calm for long enough (stops 부들부들)
-  if (!rs._dragging && (rs.wobble || 0) < 0.05) {
-    let maxV = 0;
+  // One-shot: the wrapped rest can be far longer than the drape the pegs
+  // actually allow. Fit once so constraints stop inflating collapsed segments.
+  // A grabbed rope keeps the rest captured at the finger.
+  if (!rs._dragging && !rs._playerTouched && !rs._fitDone) {
+    const draped = pathLen(pts);
+    if (draped > 50 && draped < rs.elasticRest * 0.82) {
+      rs.elasticRest = Math.max(80, draped * 0.995);
+      rs._fitDone = true;
+      rs._stillTime = 0;
+    }
+  }
+
+  // Sleep on actual point motion, not on (x-ox). A cancelled constraint
+  // fight keeps a large phantom velocity while the picture barely moves,
+  // which used to block sleep forever and rebuild the tube every frame.
+  let maxD = 0;
+  const prevF = rs._framePts;
+  if (prevF && prevF.length === n) {
     for (let i = 1; i < n - 1; i++) {
-      const v = Math.hypot(pts[i].x - pts[i].ox, pts[i].y - pts[i].oy);
-      if (v > maxV) maxV = v;
+      const d = Math.hypot(pts[i].x - prevF[i].x, pts[i].y - prevF[i].y);
+      if (d > maxD) maxD = d;
     }
-    // Count calm frames; slow climb even with peg/bend micro-oscillation
-    if (maxV < SLEEP_EPS) {
-      rs._stillFrames = (rs._stillFrames || 0) + 1.25;
-    } else if (maxV < SLEEP_EPS * 2.5) {
-      rs._stillFrames = (rs._stillFrames || 0) + 0.9;
-    } else if (maxV < 14) {
-      rs._stillFrames = (rs._stillFrames || 0) + 0.45;
-    } else {
-      rs._stillFrames = Math.max(0, (rs._stillFrames || 0) - 2);
-    }
-    // Wall-clock force-sleep: if mostly calm for ~0.9s, freeze anyway
-    if (!rs._calmSince) rs._calmSince = performance.now();
-    if (maxV > 14) rs._calmSince = performance.now();
-    const calmSec = (performance.now() - rs._calmSince) / 1000;
-    if (rs._stillFrames >= SLEEP_NEED || calmSec >= 0.9) {
+  }
+  rs._framePts = pts.map(p => ({ x: p.x, y: p.y }));
+  if (!rs._dragging) {
+    rs._awakeTime = (rs._awakeTime || 0) + Math.max(0, dt);
+    if (maxD < 0.1) rs._stillTime = (rs._stillTime || 0) + Math.max(0, dt);
+    else if (maxD < 0.5) rs._stillTime = (rs._stillTime || 0) + Math.max(0, dt) * 0.7;
+    else rs._stillTime = 0;
+    // Residual peg orbits must not quiver forever. Freeze after a short settle.
+    if (rs._awakeTime > 0.7) rs._stillTime = Math.max(rs._stillTime || 0, 0.1);
+    rs._stillFrames = rs._stillTime;
+    if (rs._stillTime >= 0.1) {
       rs._sleeping = true;
       rs._sBiasBaked = true;
       rs.wobble = 0;
       rs._accum = 0;
+      rs._alpha = 1;
       rs._stillFrames = SLEEP_NEED;
       for (let i = 1; i < n - 1; i++) {
         pts[i].ox = pts[i].x;
         pts[i].oy = pts[i].y;
       }
+      if (rs._prevPts && rs._prevPts.length === n) {
+        for (let i = 0; i < n; i++) { rs._prevPts[i].x = pts[i].x; rs._prevPts[i].y = pts[i].y; }
+      }
     }
   } else {
+    rs._stillTime = 0;
     rs._stillFrames = 0;
-    rs._calmSince = performance.now();
+    rs._awakeTime = 0;
   }
 
   return performance.now() - t0;
 }
 
-export function impulseWobble(rs, amount = 1) {
-  wakeRope(rs);
-  rs.wobble = Math.min(2.4, (rs.wobble || 0) + amount);
-  rs._wobblePhase = 0;
+export function impulseWobble() {
+  // The old call added a 2.5 Hz traveling wave. Release is the constraint
+  // spring alone now, so this is intentionally a no-op.
 }
 
-/** Kick mid-rope for lively overshoot-and-settle (2–3 oscillations). */
+/** Small one-shot axial nudge. High settle damping eats it in a single hump. */
 export function springKick(rs, strength = 1) {
-  if (!rs.points) return;
+  if (!rs || !rs.points) return;
   wakeRope(rs);
   const pts = rs.points;
   const n = pts.length;
   const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
-  const nx = -(by - ay), ny = (bx - ax);
-  const nl = Math.hypot(nx, ny) || 1;
-  // Soft axial compress + lateral — real spring overshoot without snap-jitter
-  const lx = (bx - ax) / (Math.hypot(bx - ax, by - ay) || 1);
-  const ly = (by - ay) / (Math.hypot(bx - ax, by - ay) || 1);
+  const chord = Math.hypot(bx - ax, by - ay) || 1;
+  const lx = (bx - ax) / chord, ly = (by - ay) / chord;
+  const amp = Math.min(3.5, strength * 2.2);
   for (let i = 1; i < n - 1; i++) {
-    const t = i / (n - 1);
-    const envelope = Math.sin(t * Math.PI);
-    const ampL = envelope * strength * 18;
-    const ampA = envelope * strength * 16;
-    pts[i].ox = pts[i].x - (nx / nl) * ampL * 0.45 - lx * ampA * 0.35;
-    pts[i].oy = pts[i].y - (ny / nl) * ampL * 0.45 - ly * ampA * 0.35;
+    const envelope = Math.sin((i / (n - 1)) * Math.PI);
+    pts[i].ox -= lx * amp * envelope;
+    pts[i].oy -= ly * amp * envelope;
   }
-  rs.wobble = Math.min(2.8, (rs.wobble || 0) + strength * 1.55);
-  rs._wobblePhase = 0;
+  rs.wobble = 0;
 }
 
 /** Capture elastic rest at grab so stretch builds from a real baseline. */

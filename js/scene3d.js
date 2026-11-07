@@ -4,15 +4,17 @@
  */
 import * as THREE from '../vendor/three.module.js';
 import { makeBraidCanvas, makeBraidNormalCanvas } from './braidTexture.js';
+import { displayPoints } from './rope.js';
 
 const TUBE_SEGMENTS = 96;
+const TUBE_SEGS_FIXED = 128;
 const RADIAL = 36;
 
 /**
  * Tube with Bishop/parallel-transport frames (no Frenet twist flip → no flattening at bends).
  */
-function buildParallelTransportTube(curve, tubularSegments, radius, radialSegments) {
-  const frames = computeParallelTransportFrames(curve, tubularSegments);
+function buildParallelTransportTube(curve, tubularSegments, radius, radialSegments, hintNormal) {
+  const frames = computeParallelTransportFrames(curve, tubularSegments, hintNormal);
   const radial = radialSegments;
   const tubular = tubularSegments;
   const verts = [];
@@ -57,10 +59,11 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
   geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   // stash for integrity/debug
   geom.parameters = { path: curve, tubularSegments, radius, radialSegments, closed: false };
+  geom.userData = { hintN: frames.normals[0].clone() };
   return geom;
 }
 
-function computeParallelTransportFrames(curve, segments) {
+function computeParallelTransportFrames(curve, segments, hintNormal) {
   const points = [];
   const tangents = [];
   const normals = [];
@@ -76,12 +79,21 @@ function computeParallelTransportFrames(curve, segments) {
     else tan.normalize();
     tangents.push(tan);
   }
-  // Initial normal: pick axis least aligned with T0
+  // Carry the previous frame's normal so the braid doesn't flip when the
+  // tangent crosses an axis. A fresh axis pick every rebuild was a full twist pop.
   const t0 = tangents[0];
-  const absx = Math.abs(t0.x), absy = Math.abs(t0.y), absz = Math.abs(t0.z);
-  if (absy <= absx && absy <= absz) N.set(0, 1, 0);
-  else if (absx <= absz) N.set(1, 0, 0);
-  else N.set(0, 0, 1);
+  let seeded = false;
+  if (hintNormal && Number.isFinite(hintNormal.x)) {
+    N.set(hintNormal.x, hintNormal.y, hintNormal.z);
+    N.addScaledVector(t0, -N.dot(t0));
+    if (N.lengthSq() > 1e-8) { N.normalize(); seeded = true; }
+  }
+  if (!seeded) {
+    const absx = Math.abs(t0.x), absy = Math.abs(t0.y), absz = Math.abs(t0.z);
+    if (absy <= absx && absy <= absz) N.set(0, 1, 0);
+    else if (absx <= absz) N.set(1, 0, 0);
+    else N.set(0, 0, 1);
+  }
   B.crossVectors(t0, N).normalize();
   N.crossVectors(B, t0).normalize();
   normals.push(N.clone());
@@ -631,10 +643,11 @@ export class Scene3D {
       pts = next;
     }
 
-    // Dense control points so tight bends stay round (avoid sawtooth tubes)
-    const targetN = Math.max(12, Math.min(28, Math.max(pts.length, 16)));
+    // Fixed control count. A length-dependent count made sparsify/fillet
+    // add and drop points, which popped the tube and the braid phase.
+    const targetN = 24;
     pts = resample2D(pts, targetN);
-    for (let i = 0; i < 4; i++) pts = chaikin(pts);
+    for (let i = 0; i < 2; i++) pts = chaikin(pts);
     // Re-pin ends after chaikin/resample (those filters can drift endpoints)
     pts[0] = { x: e0.x, z: e0.z };
     pts[pts.length - 1] = { x: e1.x, z: e1.z };
@@ -760,7 +773,8 @@ export class Scene3D {
       const layer = Math.min(3, (rs.z || i) % 4);
       // Rest on floor; stacking only via crossing lifts (~1 rope thickness)
       const baseY = this.ropeR * 1.28;
-      const srcPts = (rs.points && rs.points.length >= 2) ? rs.points : rs._wrapPath;
+      const shown = displayPoints(rs);
+      const srcPts = (shown && shown.length >= 2) ? shown : rs._wrapPath;
       if (!srcPts || srcPts.length < 2) { built.push(null); continue; }
       const stretch = rs.stretch || 1;
       const worldPts = this._smoothWorldPts(srcPts, ends, baseY, stretch);
@@ -918,17 +932,14 @@ export class Scene3D {
 
       let span = 0;
       for (let k = 1; k < pts.length; k++) span += pts[k].distanceTo(pts[k - 1]);
+      // Keep every control point. Dropping points that fell under a distance
+      // threshold changed the curve from frame to frame and shimmered the braid.
       const cleanPts = [];
       for (let k = 0; k < pts.length; k++) {
         const p = pts[k];
-        const isEnd = k === 0 || k === pts.length - 1;
-        if (isEnd || !cleanPts.length || cleanPts[cleanPts.length - 1].distanceTo(p) > this.ropeR * 0.07) {
-          // Always keep true endpoints (never drop last into previous)
-          if (isEnd && cleanPts.length && k === pts.length - 1) {
-            if (cleanPts[cleanPts.length - 1].distanceTo(p) < 1e-6) cleanPts.pop();
-          }
-          cleanPts.push(p);
-        }
+        if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) continue;
+        if (cleanPts.length && cleanPts[cleanPts.length - 1].distanceTo(p) < 1e-5) continue;
+        cleanPts.push(p);
       }
       if (cleanPts.length < 2) {
         cleanPts.length = 0;
@@ -937,79 +948,61 @@ export class Scene3D {
       if (span < this.ropeR * 0.5 || cleanPts.length < 2) {
         entry.mesh.visible = false;
       } else {
-        // Sparsify → fillet (adaptive radius) → dense tube.
-        let sparse = sparsifyPts(cleanPts, this.ropeR * 2.2);
-        sparse = sparse.filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
-        if (sparse.length < 2) {
-          entry.mesh.visible = false;
-          continue;
-        }
-        // Keep endpoints through sparsify
-        sparse[0] = cleanPts[0].clone();
-        sparse[sparse.length - 1] = cleanPts[cleanPts.length - 1].clone();
-        // Larger min bend radius → no kinked self-overlapping folds
-        let filleted = filletSharpCorners(sparse, this.ropeR * 2.35);
-        filleted = filletSharpCorners(sparsifyPts(filleted, this.ropeR * 1.6), this.ropeR * 2.1);
-        filleted = filletSharpCorners(filleted, this.ropeR * 1.9);
-        filleted = (filleted || []).filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z));
-        if (filleted.length < 2) filleted = sparse.slice();
-        // HARD-PIN mesh ends to cap attach points (authoritative). Caps never float off.
-        // Endpoints are cap-owned — never add crossing lift here
-        const cap0 = b.worldPts[0].clone();
-        const cap1 = b.worldPts[b.worldPts.length - 1].clone();
-        // Pin near caps but inset slightly so open tube face sits under the solid disc (not in dark recess)
+        let filleted = cleanPts.map(p => p.clone());
+        // During retract the visible end IS the pulled point, so the cap and
+        // the stored rope end stay on that mouth. Otherwise the cap owns the end.
+        const cap0 = (retractPull > 0 ? pts[0] : b.worldPts[0]).clone();
+        const cap1 = (retractPull > 0 ? pts[pts.length - 1] : b.worldPts[b.worldPts.length - 1]).clone();
         const insetEnd = (end, inward) => {
           const d = new THREE.Vector3().subVectors(inward, end);
           if (d.lengthSq() < 1e-8) return end.clone();
           d.normalize();
-          // Tiny inset; solid seal plugs close the mouth so rim never reads as a hollow cut
           return end.clone().addScaledVector(d, Math.min(this.ropeR * 0.22, this.capR * 0.18));
         };
         const inner0 = filleted[Math.min(1, filleted.length - 1)];
         const inner1 = filleted[Math.max(0, filleted.length - 2)];
         filleted[0] = insetEnd(cap0, inner0);
         filleted[filleted.length - 1] = insetEnd(cap1, inner1);
-        // Integrity still compares to cap xz via _end0/_end1 — store true attach for pin checks
         entry._attach0 = cap0.clone();
         entry._attach1 = cap1.clone();
         if (filleted[0].distanceTo(filleted[filleted.length - 1]) < this.ropeR * 0.15) {
           filleted[filleted.length - 1] = cap1.clone().add(new THREE.Vector3(0.05, 0, 0.02));
         }
-        // World-space min bend ≥ tube radius — prevents TubeGeometry self-overlap folds
         filleted = enforceMinBendWorld(filleted, this.ropeR * 1.55);
         filleted[0] = insetEnd(cap0, filleted[Math.min(1, filleted.length - 1)]);
         filleted[filleted.length - 1] = insetEnd(cap1, filleted[Math.max(0, filleted.length - 2)]);
-        // Horizontal exit under disc — open face vertical, not tipped into camera (no sunburst)
         if (filleted.length >= 3) {
           filleted[1].y = filleted[0].y;
           filleted[filleted.length - 2].y = filleted[filleted.length - 1].y;
         }
         const curve = new THREE.CatmullRomCurve3(filleted, false, 'centripetal', 0.5);
         const stretch = Math.max(0.75, Math.min(2.2, b.stretch || rs.stretch || 1));
-        // Uniform rest thickness (no local inflate). Thin only when actually stretched.
-        const thick = (stretch > 1.08)
+        const thickTarget = (stretch > 1.08)
           ? Math.max(0.78, Math.min(1.0, 1 / Math.sqrt(Math.min(stretch, 1.6))))
           : 1.0;
-        const radius = this.ropeR * Math.max(0.35, scale) * thick;
-        let segs = Math.min(180, Math.max(112, Math.round(curve.getLength() / (this.ropeR * 0.14))));
+        if (entry._thick == null) entry._thick = thickTarget;
+        else if (Math.abs(thickTarget - entry._thick) >= 0.006) {
+          entry._thick += (thickTarget - entry._thick) * (rs._dragging ? 0.25 : 1);
+        }
+        const radius = this.ropeR * Math.max(0.35, scale) * entry._thick;
         let newGeom;
         try {
-          newGeom = buildParallelTransportTube(curve, segs, radius, RADIAL);
+          newGeom = buildParallelTransportTube(curve, TUBE_SEGS_FIXED, radius, RADIAL, entry._hintN);
         } catch (err) {
           try {
-            newGeom = new THREE.TubeGeometry(curve, segs, radius, RADIAL, false);
+            newGeom = new THREE.TubeGeometry(curve, TUBE_SEGS_FIXED, radius, RADIAL, false);
           } catch (err2) {
             entry.mesh.visible = false;
             continue;
           }
         }
+        if (newGeom.userData && newGeom.userData.hintN) entry._hintN = newGeom.userData.hintN;
         entry.mesh.geometry.dispose();
         entry.mesh.geometry = newGeom;
         entry.geom = newGeom;
         entry.mesh.renderOrder = b.layer;
-        // Pin-check uses attach (cap centers); mesh ends are slightly inset under the disc
-        entry._end0 = (entry._attach0 || filleted[0]).clone();
-        entry._end1 = (entry._attach1 || filleted[filleted.length - 1]).clone();
+        entry._end0 = cap0.clone();
+        entry._end1 = cap1.clone();
         entry.colorHex = rs.color.hex;
         if (rs._sleeping) {
           const ends = b.ends;
@@ -1018,7 +1011,6 @@ export class Scene3D {
         } else {
           entry._sleepGeomOk = false;
         }
-        // Seals fully under magnet caps — never visible on top (no braid sunburst)
         const seals = this._ensureTubeEndCaps(entry, rs.color);
         const sealR = radius * 1.02;
         for (let ei = 0; ei < 2; ei++) {
@@ -1030,7 +1022,7 @@ export class Scene3D {
           seals[ei].position.copy(p).addScaledVector(dir, radius * 0.02);
           seals[ei].scale.setScalar(sealR);
           seals[ei].lookAt(p.clone().add(dir));
-          seals[ei].visible = !(rs.clearing && rs.clearT > 0.5);
+          seals[ei].visible = !(rs.clearing && rs.clearT > 0.55);
           if (entry.mesh.material.opacity < 1) {
             seals[ei].material.transparent = true;
             seals[ei].material.opacity = entry.mesh.material.opacity;
@@ -1041,13 +1033,22 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          // free1 period — denser repeats looked like stacked rings
           const period = 1.8 * (2 * this.ropeR);
           const uRepeat = Math.max(2, len / period);
+          if (entry._uRepeat == null) entry._uRepeat = uRepeat;
+          else {
+            const rel = Math.abs(uRepeat - entry._uRepeat) / Math.max(1e-6, entry._uRepeat);
+            // Sub-percent length noise used to slide every stripe. Hold the
+            // repeat until the rope has actually stretched.
+            if (rel >= 0.015) {
+              const blend = rs._dragging ? 0.4 : 1;
+              entry._uRepeat += (uRepeat - entry._uRepeat) * blend;
+            }
+          }
           const mat = entry.mesh.material;
           for (const slot of ['map', 'normalMap']) {
             if (mat[slot]) {
-              mat[slot].repeat.set(uRepeat, 1);
+              mat[slot].repeat.set(entry._uRepeat, 1);
               mat[slot].needsUpdate = true;
             }
           }
@@ -1075,8 +1076,9 @@ export class Scene3D {
           mesh.position.set(attach.x, topY, attach.z);
           continue;
         }
-        if (rs.clearing && rs.clearT > 0.55) {
+        if (rs.clearing && (!entry.mesh.visible || rs.clearT > 0.55)) {
           mesh.visible = false;
+          if (entry.endCaps) for (const s of entry.endCaps) s.visible = false;
           continue;
         }
         mesh.visible = true;
