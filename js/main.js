@@ -1,6 +1,6 @@
 import { AudioBus } from './audio.js';
 import { generateLevel, LEVEL_COUNT } from './levels.js';
-import { makeRopeState, initPoints, simulateRope, impulseWobble, springKick, wrapPolyline, captureRest, wakeRope } from './rope.js';
+import { makeRopeState, initPoints, simulateRope, wrapPolyline, captureRest, wakeRope } from './rope.js';
 import { Scene3D } from './scene3d.js';
 import { Particles } from './particles2d.js';
 import { ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
@@ -139,6 +139,8 @@ function loadLevel(idx) {
     rs.freeT = 0; rs._freeSince = null; rs._playerTouched = false; rs._cascadeEligible = false;
     rs._sleeping = false;
     rs._stillFrames = 0;
+    rs._stillTime = 0;
+    rs._awakeTime = 0;
   }
   document.getElementById('hud-level').textContent = String(idx + 1);
   document.getElementById('win-overlay').classList.add('hidden');
@@ -508,7 +510,6 @@ function onDown(e) {
       const other = ends[1 - g.end];
       captureRest(rs, g.originX, g.originY, other.x, other.y);
       rs._restLen = rs.elasticRest;
-      springKick(rs, 0.45); // small pop-up spring on lift
     }
   }
   audio.pop();
@@ -524,8 +525,16 @@ function onMove(e) {
   dragging.clientX = x;
   dragging.clientY = y;
   const board = pointerToBoard(x, y, true);
-  dragging.tx = board.x;
-  dragging.ty = board.y;
+  // ±0.5px of finger noise (iPad coalesced samples) must not move the cap.
+  // A real move lands on the exact finger position, so tracking stays 1:1.
+  if (dragging._ax == null) { dragging._ax = board.x; dragging._ay = board.y; }
+  const ndx = board.x - dragging._ax, ndy = board.y - dragging._ay;
+  if (ndx * ndx + ndy * ndy >= 0.7 * 0.7) {
+    dragging._ax = board.x;
+    dragging._ay = board.y;
+  }
+  dragging.tx = dragging._ax;
+  dragging.ty = dragging._ay;
 }
 
 function onUp(e) {
@@ -556,9 +565,9 @@ function onUp(e) {
 
   const releaseTension = rs ? (rs.tension || 0) : 0;
   if (rs) {
-    // Ref settle: ~2 soft overshoots in ~0.55–0.7s, not wild
-    springKick(rs, 0.75 + Math.min(0.7, releaseTension * 0.75));
-    impulseWobble(rs, 0.95 + Math.min(0.7, releaseTension * 0.7));
+    rs._dragging = false;
+    // The stretched chain contracts on its own. An extra kick plus a
+    // traveling wave was the repeated boing.
     audio.boing(Math.min(1.0, 0.25 + releaseTension * 0.8));
     armClearCheck();
   }
@@ -607,8 +616,6 @@ function finishSnap(anim) {
     }
   }
   if (rs) {
-    // Soft secondary settle pulse after landing squash
-    springKick(rs, 0.35);
     lastTouchedRopeId = rs.id;
     rs._playerTouched = true;
   }
@@ -792,7 +799,26 @@ function tick(ts) {
 
     const c = clampToPlayArea(dragging.x, dragging.y);
     dragging.x = c.x; dragging.y = c.y;
+    if (Math.hypot(dragging.tx - dragging.x, dragging.ty - dragging.y) < 0.45) {
+      dragging.x = dragging.tx;
+      dragging.y = dragging.ty;
+    }
     dragging.stickyPeg = emptyPegNear(dragging.x, dragging.y, PEG_ASSIST_R);
+    if (rsDrag) {
+      const pdx = dragging.x - (rsDrag._pinX ?? dragging.x);
+      const pdy = dragging.y - (rsDrag._pinY ?? dragging.y);
+      rsDrag._pinX = dragging.x;
+      rsDrag._pinY = dragging.y;
+      // A held finger is not a drag. Settle damping and sleep run so the
+      // rope can go still under the hand. Real motion wakes it immediately.
+      const moving = pdx * pdx + pdy * pdy > 0.4 * 0.4;
+      if (moving) {
+        if (!rsDrag._dragging) wakeRope(rsDrag);
+        rsDrag._dragging = true;
+      } else {
+        rsDrag._dragging = false;
+      }
+    }
   }
 
   // Snap animations
@@ -1031,8 +1057,7 @@ function dragCapToPeg(fromPegId, toPegId) {
   const rs = ropeStates.find(r => r.id === cap.ropeId);
   if (rs) {
     rs.z = Math.max(...ropeStates.map(r => r.z || 0)) + 1;
-    springKick(rs, 1.0);
-    impulseWobble(rs, 0.8);
+    wakeRope(rs);
   }
   audio.snap();
   armClearCheck();
