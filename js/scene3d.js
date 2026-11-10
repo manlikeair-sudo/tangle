@@ -3,6 +3,7 @@
  * No logarithmicDepthBuffer (iOS). Crossing lifts via real Y offsets.
  */
 import * as THREE from '../vendor/three.module.js';
+import { makeBraidNormalCanvas } from './braidTexture.js';
 import { displayPoints } from './rope.js';
 
 const TUBE_SEGMENTS = 96;
@@ -26,8 +27,8 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
     // Tight 3-ply: crests every 0.4 rope-widths along the rope, displaced in the surface.
     // One crest every ~1.1 rope widths, so the three plies read as diagonals.
     const plyPitch = Math.max(radius * 2 * 1.1, 1e-4);
-    const amp = 0.045;
-    const tilt = 1.15;
+    const amp = 0.02;
+    const tilt = 0.35;
     const sAt = new Array(tubular + 1);
     sAt[0] = 0;
     for (let i = 1; i <= tubular; i++) {
@@ -275,7 +276,7 @@ export class Scene3D {
     // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
     // Visible rope diameter 44px. Ply displacement adds 11%, so the base is smaller.
     this.ropeOuter = 44 / (2 * (894 / 10));
-    this.ropeR = this.ropeOuter / 1.045;
+    this.ropeR = this.ropeOuter / 1.02;
     this.pegR = 33 / (2 * (894 / 10));
     this.capR = this.ropeOuter;
     this.capH = 0.22 * (2 * this.ropeR);
@@ -422,7 +423,7 @@ export class Scene3D {
     this._pegTopMatCached = new THREE.MeshStandardMaterial({
       map: topTex, color: 0xffffff,
       roughness: 0.15, metalness: 0.08,
-      emissive: new THREE.Color(0xFFFFFF), emissiveIntensity: 0.45,
+      emissive: new THREE.Color(0xF4FBFF), emissiveIntensity: 0.12,
     });
     return this._pegTopMatCached;
   }
@@ -441,12 +442,25 @@ export class Scene3D {
     if (this.texCache.has(key)) return this.texCache.get(key);
     // Solid rope colour. The 3-ply shape is in the displaced vertices, so the
     // highlight and the groove come from the light, not from a painted stripe.
+    if (!this._braidNormal) {
+      const nc = makeBraidNormalCanvas(512);
+      this._braidNormal = new THREE.CanvasTexture(nc);
+      this._braidNormal.wrapS = THREE.RepeatWrapping;
+      this._braidNormal.wrapT = THREE.RepeatWrapping;
+      this._braidNormal.needsUpdate = true;
+    }
+    const nrm = this._braidNormal.clone();
+    nrm.wrapS = THREE.RepeatWrapping;
+    nrm.wrapT = THREE.RepeatWrapping;
+    nrm.repeat.set(8, 1);
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(color.light),
-      roughness: 0.24,
-      metalness: 0.04,
+      normalMap: nrm,
+      normalScale: new THREE.Vector2(1.6, 1.6),
+      roughness: 0.32,
+      metalness: 0.08,
       emissive: new THREE.Color(color.hex),
-      emissiveIntensity: 0.32,
+      emissiveIntensity: 0.2,
     });
     this.texCache.set(key, mat);
     return mat;
@@ -472,16 +486,16 @@ export class Scene3D {
         const i = (y * 128 + x) * 4;
         if (rad > 1) { d[i + 3] = 0; continue; }
         let r, g, b;
-        if (rad < 0.50) {
-          const k = rad / 0.50;
-          r = 12 + 16 * k; g = 10 + 12 * k; b = 12 + 12 * k;
-        } else if (rad > 0.94) {
-          const k = (rad - 0.94) / 0.06;
-          r = lit[0] + (255 - lit[0]) * k * 0.45;
-          g = lit[1] + (255 - lit[1]) * k * 0.45;
-          b = lit[2] + (255 - lit[2]) * k * 0.45;
+        if (rad < 0.48) {
+          const k = rad / 0.48;
+          r = 8 + 14 * k; g = 8 + 10 * k; b = 10 + 12 * k;
+        } else if (rad > 0.86) {
+          const k = Math.min(1, (rad - 0.86) / 0.14);
+          r = lit[0] + (255 - lit[0]) * k * 0.75;
+          g = lit[1] + (255 - lit[1]) * k * 0.75;
+          b = lit[2] + (255 - lit[2]) * k * 0.75;
         } else {
-          const k = (rad - 0.50) / 0.44;
+          const k = (rad - 0.48) / 0.38;
           r = col[0] + (lit[0] - col[0]) * k * 0.55;
           g = col[1] + (lit[1] - col[1]) * k * 0.55;
           b = col[2] + (lit[2] - col[2]) * k * 0.55;
@@ -515,7 +529,7 @@ export class Scene3D {
       body.receiveShadow = true;
       body.position.y = this.pegH * 0.5;
       const top = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 1.08, this.pegR * 1.08, this.pegH * 0.045, 40),
+        new THREE.CylinderGeometry(this.pegR * 0.86, this.pegR * 0.86, this.pegH * 0.035, 32),
         this._pegTopMat()
       );
       top.position.y = this.pegH - this.pegH * 0.02;
@@ -527,6 +541,12 @@ export class Scene3D {
       rim.rotation.x = Math.PI / 2;
       rim.position.y = this.pegH * 0.012;
       // Soft AO ring at base
+      const baseRing = new THREE.Mesh(
+        new THREE.TorusGeometry(this.pegR * 1.05, this.pegR * 0.16, 10, 28),
+        new THREE.MeshStandardMaterial({ color: 0x5E7C90, roughness: 0.6 })
+      );
+      baseRing.rotation.x = Math.PI / 2;
+      baseRing.position.y = this.pegH * 0.04;
       const ao = new THREE.Mesh(
         new THREE.CircleGeometry(this.pegR * 1.35, 32),
         this._pegAOMat()
@@ -537,7 +557,7 @@ export class Scene3D {
       body.renderOrder = 8;
       top.renderOrder = 28;
       rim.renderOrder = 28;
-      group.add(ao, body, top, rim);
+      group.add(ao, baseRing, body, top, rim);
       group.userData.body = body;
       this.scene.add(group);
       this.pegs.push(group);
@@ -564,15 +584,21 @@ export class Scene3D {
   _makeCapMesh(color) {
     const group = new THREE.Group();
     const outer = this.capR;
-    // The rope end is the cap: same diameter as the rope, recessed hole, thin rim.
+    // Rounded tip the same width as the rope, with the grommet on its face.
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(outer, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
+      this._ropeMat(color)
+    );
+    dome.scale.set(1, 0.42, 1);
     const face = new THREE.Mesh(
-      new THREE.CircleGeometry(outer * 0.98, 40),
+      new THREE.CircleGeometry(outer * 0.92, 40),
       this._capMat(color)
     );
     face.rotation.x = -Math.PI / 2;
-    face.position.y = 0.012;
+    face.position.y = outer * 0.34;
     face.renderOrder = 16;
-    group.add(face);
+    dome.renderOrder = 15;
+    group.add(dome, face);
     group.userData.colorHex = color.hex;
     group.userData.body = face;
     return group;
@@ -1084,7 +1110,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 1.25 * (2 * this.ropeR);
+          const period = 0.42 * (2 * this.ropeOuter);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
