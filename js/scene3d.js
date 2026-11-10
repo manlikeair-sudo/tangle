@@ -228,12 +228,11 @@ export class Scene3D {
     this.shadowFloor.receiveShadow = true;
     this.scene.add(this.shadowFloor);
 
-    // Brighter hemi/ambient so MeshStandard braid stays saturated (no grey wash)
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0xc5d0dc, 0.55);
+    // Ropes are unlit. These lights are for the caps and pegs, which need a
+    // real upper-left key or the rims and cylinders stay flat.
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8aa0b4, 0.28);
     this.scene.add(this.hemi);
-    // Overhead and on the camera side, so the visible face is the lit side
-    // and the contact shadow stays short.
-    this.sun = new THREE.DirectionalLight(0xffffff, 0.72);
+    this.sun = new THREE.DirectionalLight(0xffffff, 0.42);
     this.sun.position.set(0.4, 24, 7);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
@@ -247,7 +246,11 @@ export class Scene3D {
     this.sun.shadow.normalBias = 0.04;
     this.sun.shadow.radius = 10;
     this.scene.add(this.sun);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    // Screen-left and above. Screen-left is -X; the top of the frame is -Z.
+    this.key = new THREE.DirectionalLight(0xfffaf4, 1.35);
+    this.key.position.set(-14, 18, -6);
+    this.scene.add(this.key);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.16));
 
     this.VIEW_W = 10;
     this._applyTargetProportions();
@@ -280,14 +283,15 @@ export class Scene3D {
     // Screen target on an 894-wide frame: peg top ~31px, rope ~31px (measured, then scaled).
     // Tuned so an 894px-wide frame measures: peg top ~32px, rope ~42px (reference inscribed widths).
     // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
-    // Visible rope diameter 44px. Ply displacement adds 11%, so the base is smaller.
-    this.ropeOuter = 44 / (2 * (894 / 10));
+    // Reference rope/cap ends read about 28% thicker than the 44px pass.
+    // Peg footprint stays put; only the drawn rope and cap grow.
+    this.ropeOuter = 56 / (2 * (894 / 10));
     this.ropeR = this.ropeOuter / 1.02;
     this.pegR = 33 / (2 * (894 / 10));
-    this.capR = this.ropeOuter;
+    this.capR = this.ropeOuter * 1.08;
     this.capH = 0.22 * (2 * this.ropeR);
-    // About 1.5 rope-widths of peg visible above the rope top.
-    this.pegH = this.ropeR * 6.2;
+    const pegRopeR = 44 / (2 * (894 / 10)) / 1.02;
+    this.pegH = pegRopeR * 6.2;
   }
 
   resize(cssW, cssH, dpr) {
@@ -380,35 +384,37 @@ export class Scene3D {
 
   _pegMat() {
     if (this._pegMatCached) return this._pegMatCached;
-    const sideC = document.createElement('canvas');
-    sideC.width = 128; sideC.height = 128;
-    const sctx = sideC.getContext('2d');
-    const sg = sctx.createLinearGradient(0, 0, 0, 128);
-    sg.addColorStop(0, '#D4F0FA');
-    sg.addColorStop(0.35, '#B0E4F6');
-    sg.addColorStop(0.7, '#96D8F2');
-    sg.addColorStop(1, '#82CBEC');
-    sctx.fillStyle = sg;
-    sctx.fillRect(0, 0, 128, 128);
-    // Strong specular streak (glossy cylinder look under NoToneMapping)
-    const hg = sctx.createLinearGradient(0, 0, 128, 0);
-    hg.addColorStop(0.0, 'rgba(255,255,255,0.0)');
-    hg.addColorStop(0.18, 'rgba(255,255,255,0.15)');
-    hg.addColorStop(0.32, 'rgba(255,255,255,0.72)');
-    hg.addColorStop(0.40, 'rgba(255,255,255,0.35)');
-    hg.addColorStop(0.55, 'rgba(255,255,255,0.05)');
-    hg.addColorStop(0.85, 'rgba(30,80,110,0.10)');
-    hg.addColorStop(1.0, 'rgba(20,60,90,0.18)');
-    sctx.fillStyle = hg;
-    sctx.fillRect(0, 0, 128, 128);
-    const sideTex = new THREE.CanvasTexture(sideC);
-    sideTex.colorSpace = THREE.SRGBColorSpace;
-    this._pegMatCached = new THREE.MeshStandardMaterial({
-      map: sideTex, color: 0xffffff,
-      roughness: 0.22, metalness: 0.08,
-      emissive: new THREE.Color(0x7EC8E8), emissiveIntensity: 0.12,
-    });
+    // Painted shade. A lit standard cylinder was washing out to one cyan-grey
+    // under the fill light, and the UV streak sat on the wrong side.
+    this._pegMatCached = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
     return this._pegMatCached;
+  }
+
+  /** Left side and a vertical streak bright, right side and the foot dark. */
+  _shadePegBody(geom) {
+    const pos = geom.attributes.position;
+    const nrm = geom.attributes.normal;
+    const h = geom.parameters.height || 1;
+    const lit = new THREE.Color(0xE7F5FC);
+    const mid = new THREE.Color(0x7EB4CC);
+    const sh = new THREE.Color(0x3A5C70);
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const nx = nrm.getX(i);
+      const nz = nrm.getZ(i);
+      const y = pos.getY(i);
+      const foot = (y / (h * 0.5) + 1) * 0.5; // 0 at the foot, 1 at the top
+      const side = (-nx) * 0.5 + 0.5; // 1 on screen-left
+      // Highlight just left of center, darker at both silhouettes, darker still on the right.
+      const band = Math.exp(-((side - 0.64) ** 2) / (2 * 0.11 * 0.11));
+      const c = sh.clone().lerp(mid, Math.min(1, side * 0.85 + 0.15));
+      c.lerp(lit, band * Math.max(0, nz));
+      const k = 0.34 + 0.66 * foot * foot;
+      cols[i * 3] = Math.min(1, c.r * k);
+      cols[i * 3 + 1] = Math.min(1, c.g * k);
+      cols[i * 3 + 2] = Math.min(1, c.b * k);
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   }
 
   _pegTopMat() {
@@ -416,20 +422,17 @@ export class Scene3D {
     const topC = document.createElement('canvas');
     topC.width = 128; topC.height = 128;
     const tctx = topC.getContext('2d');
-    const rg = tctx.createRadialGradient(48, 44, 4, 64, 64, 64);
-    rg.addColorStop(0, '#FFFFFF');
-    rg.addColorStop(0.25, '#F2FBFE');
-    rg.addColorStop(0.55, '#D8F0FA');
-    rg.addColorStop(0.85, '#B5E3F5');
-    rg.addColorStop(1, '#9DD6EE');
+    // Flat cap, lighter on screen-left. A radial hotspot read as a ball.
+    const rg = tctx.createLinearGradient(0, 0, 128, 0);
+    rg.addColorStop(0, '#F4FBFF');
+    rg.addColorStop(0.45, '#D5EEF8');
+    rg.addColorStop(1, '#9FCDDF');
     tctx.fillStyle = rg;
     tctx.fillRect(0, 0, 128, 128);
     const topTex = new THREE.CanvasTexture(topC);
     topTex.colorSpace = THREE.SRGBColorSpace;
-    this._pegTopMatCached = new THREE.MeshStandardMaterial({
+    this._pegTopMatCached = new THREE.MeshBasicMaterial({
       map: topTex, color: 0xffffff,
-      roughness: 0.15, metalness: 0.08,
-      emissive: new THREE.Color(0xF4FBFF), emissiveIntensity: 0.12,
     });
     return this._pegTopMatCached;
   }
@@ -465,79 +468,67 @@ export class Scene3D {
     return mat;
   }
 
-  _capMat(color) {
-    const key = 'cap|' + color.hex + '|' + color.light;
-    if (this.texCache.has(key)) return this.texCache.get(key);
-    const size = 256;
-    const c = document.createElement('canvas');
-    c.width = size; c.height = size;
-    const ctx = c.getContext('2d');
-    const img = ctx.createImageData(size, size);
-    const d = img.data;
-    const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-    const col = hex(color.hex);
-    const lit = hex(color.light);
-    // Specular sits up-left of the hole, matching the reference eye.
-    const specX = -0.10, specY = -0.11;
-    const clamp = (v) => Math.max(0, Math.min(255, v));
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const dx = (x + 0.5 - size / 2) / (size * 0.46);
-        const dy = (y + 0.5 - size / 2) / (size * 0.46);
-        const rad = Math.hypot(dx, dy);
-        const i = (y * size + x) * 4;
-        if (rad > 1) { d[i + 3] = 0; continue; }
-        let r, g, b;
-        if (rad < 0.40) {
-          const sd = Math.hypot(dx - specX, dy - specY);
-          const spec = Math.exp(-(sd * sd) / (2 * 0.13 * 0.13));
-          const occ = rad / 0.40;
-          const base = 16 + 10 * (1 - occ);
-          r = base + spec * (248 - base);
-          g = base + spec * (250 - base);
-          b = base + 6 + spec * (252 - base);
-        } else if (rad < 0.68) {
-          const k = (rad - 0.40) / 0.28;
-          const whiteMix = 0.62 * (1 - k) + 0.08;
-          const lipR = lit[0] + (255 - lit[0]) * whiteMix;
-          const lipG = lit[1] + (255 - lit[1]) * whiteMix;
-          const lipB = lit[2] + (255 - lit[2]) * whiteMix;
-          const body = k * k;
-          r = lipR * (1 - body) + col[0] * body;
-          g = lipG * (1 - body) + col[1] * body;
-          b = lipB * (1 - body) + col[2] * body;
-        } else {
-          const k = Math.min(1, (rad - 0.68) / 0.32);
-          r = lit[0] * (1 - k) * 0.25 + col[0] * (0.75 + 0.25 * k);
-          g = lit[1] * (1 - k) * 0.25 + col[1] * (0.75 + 0.25 * k);
-          b = lit[2] * (1 - k) * 0.25 + col[2] * (0.75 + 0.25 * k);
-        }
-        d[i] = clamp(r); d[i + 1] = clamp(g); d[i + 2] = clamp(b); d[i + 3] = 255;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const mat = new THREE.MeshBasicMaterial({
-      map: tex, color: 0xffffff, transparent: true,
-    });
-    this.texCache.set(key, mat);
-    return mat;
+  _vertexMat() {
+    if (this._vertexMatCached) return this._vertexMatCached;
+    this._vertexMatCached = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
+    return this._vertexMatCached;
   }
 
-  _capDomeMat(color) {
-    const key = 'dome|' + color.hex + '|' + color.light;
-    if (this.texCache.has(key)) return this.texCache.get(key);
-    // Solid colour. A braid map on the sphere's lat-long UVs turns into
-    // concentric rings around the hole, which reads as a swirl.
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      vertexColors: true,
+  _capHoleMat() {
+    if (this._capHoleCached) return this._capHoleCached;
+    const c = document.createElement('canvas');
+    c.width = 8; c.height = 64;
+    const g = c.getContext('2d');
+    const grd = g.createLinearGradient(0, 0, 0, 64);
+    // Top of the wall, just under the lip, is the darkest. The floor stays dark.
+    grd.addColorStop(0, '#1c2128');
+    grd.addColorStop(0.35, '#101318');
+    grd.addColorStop(1, '#07080a');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 8, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this._capHoleCached = new THREE.MeshBasicMaterial({
+      map: tex, color: 0xffffff, side: THREE.BackSide,
     });
-    mat.userData.hex = color.hex;
-    mat.userData.light = color.light;
-    this.texCache.set(key, mat);
-    return mat;
+    return this._capHoleCached;
+  }
+
+  /**
+   * TorusGeometry lies in XY. After rotation.x = +90°, local -Y is screen-up
+   * and local -X is screen-left, which is where the reference rim catches light.
+   * The inner half of the bead is the dark wall of the hole.
+   */
+  _paintRim(geom, color) {
+    const major = geom.parameters.radius;
+    const minor = geom.parameters.tube;
+    const pos = geom.attributes.position;
+    const base = new THREE.Color(color.hex);
+    const lit = new THREE.Color(color.light);
+    const dark = new THREE.Color(color.dark);
+    const white = new THREE.Color(0xfffaf6);
+    const cols = new Float32Array(pos.count * 3);
+    const ulAng = Math.atan2(-1, -1);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const radial = Math.hypot(x, y);
+      let ang = Math.atan2(y, x) - ulAng;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      const z = pos.getZ(i);
+      const facingUp = Math.max(0, Math.min(1, -z / minor));
+      const highlight = Math.exp(-(ang * ang) / (2 * 0.62 * 0.62));
+      const inner = Math.max(0, Math.min(1, (major - radial) / minor));
+      const c = base.clone().lerp(lit, 0.4);
+      c.lerp(dark, inner * 0.95);
+      c.lerp(white, Math.min(1, highlight * (0.35 + 0.65 * facingUp) * (1 - inner * 0.35)));
+      const shade = Math.exp(-((ang - Math.PI) ** 2) / (2 * 0.7 * 0.7));
+      c.lerp(dark, shade * 0.7);
+      cols[i * 3] = c.r;
+      cols[i * 3 + 1] = c.g;
+      cols[i * 3 + 2] = c.b;
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   }
 
   syncPegs(pegList) {
@@ -548,18 +539,17 @@ export class Scene3D {
     }
     while (this.pegs.length < pegList.length) {
       const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 0.96, this.pegR * 1.02, this.pegH, 40),
-        this._pegMat()
-      );
+      const bodyGeom = new THREE.CylinderGeometry(this.pegR * 0.96, this.pegR * 1.02, this.pegH, 40);
+      this._shadePegBody(bodyGeom);
+      const body = new THREE.Mesh(bodyGeom, this._pegMat());
       body.castShadow = true;
       body.receiveShadow = true;
       body.position.y = this.pegH * 0.5;
       const top = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 0.86, this.pegR * 0.86, this.pegH * 0.035, 32),
+        new THREE.CylinderGeometry(this.pegR * 0.9, this.pegR * 0.96, this.pegH * 0.018, 32),
         this._pegTopMat()
       );
-      top.position.y = this.pegH - this.pegH * 0.02;
+      top.position.y = this.pegH - this.pegH * 0.008;
       top.castShadow = true;
       const rim = new THREE.Mesh(
         new THREE.TorusGeometry(this.pegR * 0.97, this.pegR * 0.04, 10, 48),
@@ -570,7 +560,7 @@ export class Scene3D {
       // Soft AO ring at base
       const baseRing = new THREE.Mesh(
         new THREE.TorusGeometry(this.pegR * 1.05, this.pegR * 0.16, 10, 28),
-        new THREE.MeshStandardMaterial({ color: 0x5E7C90, roughness: 0.6 })
+        new THREE.MeshBasicMaterial({ color: 0x3E5C6E })
       );
       baseRing.rotation.x = Math.PI / 2;
       baseRing.position.y = this.pegH * 0.04;
@@ -610,37 +600,82 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    const outer = this.capR;
-    // Open the pole so the braid cannot pinch into a spiral, and seat the
-    // grommet in that mouth. The shoulder keeps the same ply as the rope.
-    const theta0 = 0.92;
-    const domeGeom = new THREE.SphereGeometry(outer, 40, 18, 0, Math.PI * 2, theta0, Math.PI * 0.5 - theta0 + 0.08);
-    const col = new THREE.Color(color.hex);
+    const R = this.capR;
+    // Dark opening is 45% of the outer diameter. The bead between that
+    // opening and the silhouette is the thick rim.
+    const holeR = R * 0.56;
+    const minor = (R - holeR) * 0.5;
+    const major = holeR + minor;
+    const vmat = this._vertexMat();
+
+    const shoulderGeom = new THREE.SphereGeometry(R, 36, 16, 0, Math.PI * 2, 0.58, 1.05);
+    const base = new THREE.Color(color.hex);
     const lit = new THREE.Color(color.light);
-    const nrm = domeGeom.attributes.normal;
-    const domeCols = new Float32Array(nrm.count * 3);
-    for (let i = 0; i < nrm.count; i++) {
-      const up = Math.max(0, nrm.getY(i));
-      const k = 0.86 + 0.20 * up;
-      domeCols[i * 3] = Math.min(1, col.r * k * 0.82 + lit.r * 0.18);
-      domeCols[i * 3 + 1] = Math.min(1, col.g * k * 0.82 + lit.g * 0.18);
-      domeCols[i * 3 + 2] = Math.min(1, col.b * k * 0.82 + lit.b * 0.18);
+    const dark = new THREE.Color(color.dark);
+    const sp = shoulderGeom.attributes.position;
+    const sn = shoulderGeom.attributes.normal;
+    const sc = new Float32Array(sn.count * 3);
+    const white = new THREE.Color(0xfffaf6);
+    const ulAng = Math.atan2(-1, -1);
+    for (let i = 0; i < sn.count; i++) {
+      const x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i);
+      const xz = Math.hypot(x, z) / R;
+      let ang = Math.atan2(z, x) - ulAng;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      const ul = Math.exp(-(ang * ang) / (2 * 0.48 * 0.48));
+      const lr = Math.exp(-((ang - Math.PI) ** 2) / (2 * 0.62 * 0.62));
+      // A band just outside the hole is the glossy bevel. Inside that band
+      // is the dark wall; the silhouette gets a dark outline.
+      const ring = Math.exp(-((xz - 0.70) ** 2) / (2 * 0.07 * 0.07));
+      const inner = Math.max(0, Math.min(1, (0.60 - xz) / 0.07));
+      const outer = Math.max(0, Math.min(1, (xz - 0.90) / 0.07));
+      const c = base.clone().lerp(lit, 0.35 + ring * 0.4);
+      c.lerp(white, ul * ring * 0.98);
+      c.lerp(dark, lr * ring * 0.72 + inner * 0.88 + outer * 0.7);
+      sc[i * 3] = c.r; sc[i * 3 + 1] = c.g; sc[i * 3 + 2] = c.b;
     }
-    domeGeom.setAttribute('color', new THREE.BufferAttribute(domeCols, 3));
-    const dome = new THREE.Mesh(domeGeom, this._capDomeMat(color));
-    dome.scale.set(1, 0.86, 1);
-    const mouthY = Math.cos(theta0) * 0.86 * outer;
-    const face = new THREE.Mesh(
-      new THREE.CircleGeometry(Math.sin(theta0) * outer * 1.04, 48),
-      this._capMat(color)
+    shoulderGeom.setAttribute('color', new THREE.BufferAttribute(sc, 3));
+    const shoulder = new THREE.Mesh(shoulderGeom, vmat);
+    shoulder.scale.set(1, 0.66, 1);
+
+    const rimGeom = new THREE.TorusGeometry(major, minor * 0.92, 18, 56);
+    this._paintRim(rimGeom, color);
+    const rim = new THREE.Mesh(rimGeom, vmat);
+    rim.rotation.x = Math.PI / 2;
+    const mouthY = Math.cos(0.58) * 0.66 * R;
+    rim.position.y = mouthY;
+
+    const outline = new THREE.Mesh(
+      new THREE.TorusGeometry(R * 1.01, R * 0.032, 8, 40),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(color.dark) })
     );
-    face.rotation.x = -Math.PI / 2;
-    face.position.y = mouthY + outer * 0.02;
-    face.renderOrder = 16;
-    dome.renderOrder = 15;
-    group.add(dome, face);
+    outline.rotation.x = Math.PI / 2;
+    outline.position.y = R * 0.02;
+
+    // Shallow well: a wide dark floor with only a short inner wall, so the
+    // opening stays a round recess instead of a deep crescent.
+    const wellH = R * 0.22;
+    const well = new THREE.Mesh(
+      new THREE.CylinderGeometry(holeR * 0.98, holeR * 0.86, wellH, 32, 1, true),
+      this._capHoleMat()
+    );
+    well.position.y = mouthY - wellH * 0.55;
+
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(holeR * 0.86, 28),
+      new THREE.MeshBasicMaterial({ color: 0x0c0e12 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = well.position.y - wellH * 0.5 + R * 0.01;
+
+    shoulder.renderOrder = 14;
+    outline.renderOrder = 15;
+    well.renderOrder = 16;
+    floor.renderOrder = 16;
+    rim.renderOrder = 17;
+    group.add(shoulder, outline, well, floor, rim);
     group.userData.colorHex = color.hex;
-    group.userData.body = face;
+    group.userData.body = rim;
     return group;
   }
 
