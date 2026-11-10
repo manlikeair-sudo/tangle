@@ -143,7 +143,65 @@ function anyFreeRope(pegs, ropes) {
   return false;
 }
 
+/** Hand-placed stand-in for the reference's level 201. Shown on first load. */
+function showcaseLevel() {
+  const C = {
+    peach: { name: 'peach', hex: '#E8B59A', dark: '#8C5A48', light: '#F3D2C2' },
+    cyan: { name: 'cyan', hex: '#3EC8F6', dark: '#1478A0', light: '#8EE4FF' },
+    red: { name: 'red', hex: '#E23B34', dark: '#8E1E1A', light: '#FF7A72' },
+    blue: { name: 'blue', hex: '#2E6BFF', dark: '#163A9A', light: '#7AA4FF' },
+    maroon: { name: 'maroon', hex: '#8E322C', dark: '#4E1614', light: '#C45A52' },
+    green: { name: 'green', hex: '#2E9B48', dark: '#145C28', light: '#6ED48A' },
+    gold: { name: 'gold', hex: '#F0C23A', dark: '#8A6A10', light: '#FFE08A' },
+    lime: { name: 'lime', hex: '#7ED321', dark: '#3E7A10', light: '#C6F27A' },
+    navy: { name: 'navy', hex: '#24315C', dark: '#101628', light: '#5A6A9A' },
+    orange: { name: 'orange', hex: '#F0922A', dark: '#8A4E10', light: '#FFC47A' },
+    purple: { name: 'purple', hex: '#6E46E8', dark: '#3A2088', light: '#B49AFF' },
+    brown: { name: 'brown', hex: '#6B3A2E', dark: '#3A1C16', light: '#A86A58' },
+  };
+  // Positions traced from the reference start frame, in board 0..1.
+  const raw = [
+    [0.495, 0.095], [0.772, 0.336], [0.508, 0.351], [0.246, 0.358],
+    [0.398, 0.486], [0.636, 0.493], [0.743, 0.644], [0.286, 0.648],
+    [0.492, 0.651], [0.508, 0.908], [0.620, 0.180], [0.300, 0.200],
+    [0.860, 0.400], [0.140, 0.470], [0.560, 0.780], [0.700, 0.820],
+    [0.280, 0.840], [0.420, 0.180], [0.580, 0.550], [0.400, 0.720],
+    [0.740, 0.520], [0.160, 0.700], [0.600, 0.360], [0.340, 0.360],
+    [0.860, 0.680], [0.140, 0.280],
+  ];
+  const pegs = raw.map((p, i) => ({
+    id: i, nx: p[0], ny: p[1], capacity: 1, stack: [],
+  }));
+  const ropes = [
+    { id: 0, color: C.peach, ends: [13, 0], bend: 1 },
+    { id: 1, color: C.cyan, ends: [11, 12], bend: -1 },
+    { id: 2, color: C.red, ends: [10, 15], bend: 1 },
+    { id: 3, color: C.blue, ends: [1, 6], bend: 1 },
+    { id: 4, color: C.maroon, ends: [25, 7], bend: -1 },
+    { id: 5, color: C.green, ends: [4, 9], bend: 1 },
+    { id: 6, color: C.gold, ends: [17, 5], bend: -1 },
+    { id: 7, color: C.lime, ends: [16, 24], bend: 1 },
+    { id: 8, color: C.purple, ends: [21, 14], bend: 1 },
+    { id: 9, color: C.navy, ends: [3, 2], bend: -1 },
+    { id: 10, color: C.orange, ends: [23, 20], bend: 1 },
+    { id: 11, color: C.brown, ends: [19, 8], bend: -1 },
+  ];
+  for (const r of ropes) {
+    pegs[r.ends[0]].stack.push({ ropeId: r.id, end: 0 });
+    pegs[r.ends[1]].stack.push({ ropeId: r.id, end: 1 });
+  }
+  return {
+    pegs,
+    ropes: ropes.map(r => ({ id: r.id, color: r.color, bend: r.bend, clearing: false, clearT: 0, freeT: 0 })),
+    difficulty: 'HARD',
+    seconds: 180,
+    displayLevel: 201,
+    showcase: true,
+  };
+}
+
 export function generateLevel(levelIndex) {
+  if (levelIndex === 0) return showcaseLevel();
   const rng = mulberry32(3000 + levelIndex * 97);
   // 10+ levels, up to ~10 ropes on HARD
   // 12 levels: 3 → ~10 ropes; always leave empty pegs for moves

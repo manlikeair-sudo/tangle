@@ -18,7 +18,7 @@ let levelIdx = 0;
 let level = null;
 let ropeStates = [];
 let pegs = [];
-let coins = 0;
+let coins = 10150;
 let timeLeft = 180;
 let running = false;
 let dragging = null;
@@ -77,19 +77,52 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
+function layShowcaseArc(rs, bend) {
+  const pts = rs.points;
+  const n = pts.length;
+  const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len, ny = dx / len;
+  const mag = Math.abs(bend) <= 2 ? bend * len : bend;
+  bend = Math.max(-len * 0.42, Math.min(len * 0.42, mag));
+  let path = 0, px = ax, py = ay;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const s = Math.sin(t * Math.PI) * bend;
+    const x = ax + dx * t + nx * s;
+    const y = ay + dy * t + ny * s;
+    pts[i].x = x; pts[i].y = y; pts[i].ox = x; pts[i].oy = y;
+    if (i) path += Math.hypot(x - px, y - py);
+    px = x; py = y;
+  }
+  rs.elasticRest = Math.max(80, path * 0.98);
+  rs._guide = pts.map(p => ({ x: p.x, y: p.y }));
+  rs._prevPts = pts.map(p => ({ x: p.x, y: p.y }));
+  rs._framePts = pts.map(p => ({ x: p.x, y: p.y }));
+  rs._fitDone = true;
+  rs.stretch = 1;
+}
+
 function layoutPegs() {
   if (!level) return;
   // Compact board so packed peg cluster reads ~0.60 W on screen
   const isLandscape = W > H;
   // Board sized so packed cluster (~0.86 of board) ≈ 0.60 W on screen
-  boardW = isLandscape ? Math.min(W * 0.74, H * 1.05) : Math.min(W * 0.74, H * 0.60);
-  boardH = boardW * 0.82;
-  if (isLandscape) boardH = Math.min(boardH, H * 0.75);
-  else boardH = Math.min(boardH, H * 0.56);
-  boardOX = (W - boardW) / 2;
-  const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
-  // Slightly below middle of free area under HUD
-  boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
+  if (level.showcase && !isLandscape) {
+    boardW = W * 0.70;
+    boardH = H * 0.52;
+    boardOX = (W - boardW) / 2;
+    boardOY = H * 0.22;
+  } else {
+    boardW = isLandscape ? Math.min(W * 0.74, H * 1.05) : Math.min(W * 0.74, H * 0.60);
+    boardH = boardW * 0.82;
+    if (isLandscape) boardH = Math.min(boardH, H * 0.75);
+    else boardH = Math.min(boardH, H * 0.56);
+    boardOX = (W - boardW) / 2;
+    const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
+    boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
+  }
   for (const p of pegs) {
     p.x = boardOX + p.nx * boardW;
     p.y = boardOY + p.ny * boardH;
@@ -116,8 +149,9 @@ function loadLevel(idx) {
   for (const rs of ropeStates) {
     const ends = endPositions(rs.id);
     if (ends) initPoints(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, clear);
+    if (level.showcase && rs.bend != null && rs.points) layShowcaseArc(rs, rs.bend);
   }
-  for (let s = 0; s < 24; s++) {
+  for (let s = 0; s < (level.showcase ? 0 : 24); s++) {
     for (const rs of ropeStates) {
       const ends = endPositions(rs.id);
       if (!ends || !rs.points) continue;
@@ -141,8 +175,15 @@ function loadLevel(idx) {
     rs._stillFrames = 0;
     rs._stillTime = 0;
     rs._awakeTime = 0;
+    if (level.showcase) {
+      rs._sleeping = true;
+      rs._stillTime = 1;
+      rs._stillFrames = 16;
+      rs.wobble = 0;
+    }
   }
-  document.getElementById('hud-level').textContent = String(idx + 1);
+  document.getElementById('hud-level').textContent = String(level.displayLevel || (idx + 1));
+  document.getElementById('coin-val').textContent = formatCoins(coins);
   document.getElementById('win-overlay').classList.add('hidden');
   document.getElementById('fail-overlay').classList.add('hidden');
   const diff = document.getElementById('pill-diff');

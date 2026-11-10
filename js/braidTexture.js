@@ -13,20 +13,19 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const cg = parseInt(colorHex.slice(3, 5), 16);
   const cb = parseInt(colorHex.slice(5, 7), 16);
 
-  const grooveR = Math.round(cr * 0.42), grooveG = Math.round(cg * 0.42), grooveB = Math.round(cb * 0.42);
-  const crestR = Math.min(255, Math.round(cr * 1.28));
-  const crestG = Math.min(255, Math.round(cg * 1.28));
-  const crestB = Math.min(255, Math.round(cb * 1.28));
-  const twists = 1.0;
+  const grooveR = Math.round(cr * 0.62), grooveG = Math.round(cg * 0.62), grooveB = Math.round(cb * 0.62);
+  const crestR = Math.min(255, Math.round(cr * 1.12));
+  const crestG = Math.min(255, Math.round(cg * 1.12));
+  const crestB = Math.min(255, Math.round(cb * 1.12));
+  const twists = 0.42;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
       const ang = (v - twists * u) * Math.PI * 2;
-      // Two fat strands: |cos| peaks twice per turn.
+      // Soft wide two-strand twist.
       let t = Math.abs(Math.cos(ang));
-      // Fat strands, thin groove — a candy-cane, not a barcode.
-      t = Math.pow(Math.max(0, Math.min(1, t)), 0.32);
+      t = 0.35 + 0.65 * Math.pow(Math.max(0, Math.min(1, t)), 0.8);
       let r, g, b;
       if (t < 0.22) {
         const k = t / 0.22;
@@ -41,8 +40,8 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
         g = cg + (crestG - cg) * k2;
         b = cb + (crestB - cb) * k2;
       }
-      // Mild cylindrical wrap for round-tube limb darkening
-      const wrap = 0.78 + 0.22 * Math.cos((v - 0.5) * Math.PI);
+      // Dark rim toward the silhouette of the tube.
+      const wrap = 0.45 + 0.55 * Math.pow(Math.sin(v * Math.PI), 0.55);
       r *= wrap; g *= wrap; b *= wrap;
 
       const i = (y * size + x) * 4;

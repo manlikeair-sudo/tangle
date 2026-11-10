@@ -52,8 +52,8 @@ html, body {
   width: clamp(48px, 6.2vw, 64px);
   height: clamp(48px, 6.2vw, 64px);
   border: 4px solid #1a3a8a;
-  border-radius: 18px;
-  background: linear-gradient(180deg, #5BA0FF 0%, #2B6AE8 55%, #1E5AD0 100%);
+  border-radius: 14px;
+  background: #2B6EE1;
   box-shadow: 0 5px 0 #143A9A, 0 8px 16px rgba(0,0,0,.22), inset 0 2px 0 rgba(255,255,255,.35);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
@@ -63,54 +63,57 @@ html, body {
 
 #hud-pill {
   display: flex; align-items: stretch;
-  border-radius: 999px; overflow: hidden;
-  border: clamp(3px, 0.4vw, 4.5px) solid #0F1B3A;
-  box-shadow: 0 6px 0 rgba(20,30,50,.35), 0 10px 20px rgba(0,0,0,.2);
+  border-radius: 28px; overflow: hidden;
+  background: #fff;
+  border: 5px solid #fff;
+  box-shadow: 0 10px 24px rgba(20,40,70,.18), 0 0 0 1px rgba(255,255,255,.8);
   font-weight: 700; flex-shrink: 1; min-width: 0;
-  max-width: min(62vw, 520px);
+  max-width: min(78vw, 640px);
 }
 
 .pill-level {
-  background: linear-gradient(180deg, #5BA0FF, #2B6AE8 60%, #1E55C8);
+  background: #2B6EE1;
   color: #fff;
-  padding: clamp(6px, 0.9vw, 10px) clamp(10px, 1.6vw, 18px);
+  padding: clamp(8px, 1vw, 12px) clamp(14px, 2vw, 22px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  line-height: 1.05; border-right: 2px solid rgba(0,0,0,.15);
-  min-width: clamp(64px, 8vw, 88px);
+  line-height: 0.95;
+  min-width: clamp(78px, 11vw, 118px);
+  border-radius: 22px 0 0 22px;
 }
-.lvl-label { font-size: clamp(12px, 1.5vw, 15px); font-weight: 600; opacity: 0.95; letter-spacing: 0.02em; }
-.lvl-num { font-size: clamp(22px, 3vw, 30px); font-weight: 700; margin-top: -1px; }
+.lvl-label { font-size: clamp(13px, 1.7vw, 18px); font-weight: 600; letter-spacing: 0.01em; }
+.lvl-num { font-size: clamp(28px, 4vw, 40px); font-weight: 700; margin-top: 1px; }
 
 .pill-timer {
-  background: linear-gradient(180deg, #FFFFFF, #F7F9FC);
-  color: #1A2744;
-  padding: clamp(8px, 1.1vw, 12px) clamp(12px, 1.6vw, 18px);
-  display: flex; align-items: center; gap: clamp(6px, 0.9vw, 10px);
-  font-size: clamp(20px, 2.8vw, 30px); font-weight: 700; letter-spacing: 0.02em;
+  background: #fff;
+  color: #16325C;
+  padding: clamp(8px, 1.1vw, 14px) clamp(14px, 2vw, 22px);
+  display: flex; align-items: center; gap: clamp(8px, 1vw, 12px);
+  font-size: clamp(28px, 3.6vw, 40px); font-weight: 700; letter-spacing: 0.01em;
   border: 0;
-  box-shadow: inset 0 0 0 2.5px #1E3A8A33;
+  box-shadow: none;
 }
 .clock-svg { flex-shrink: 0; width: clamp(20px, 2.6vw, 28px); height: clamp(20px, 2.6vw, 28px); }
 
 .pill-diff {
-  background: linear-gradient(180deg, #C084FC, #7C3AED 55%, #6D28D9);
+  background: #7B2CDB;
   color: #fff;
-  padding: clamp(6px, 0.9vw, 10px) clamp(10px, 1.6vw, 18px);
+  padding: clamp(6px, 0.9vw, 10px) clamp(12px, 1.8vw, 18px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 0; border-left: 2px solid rgba(0,0,0,.12);
-  min-width: clamp(56px, 7vw, 78px);
+  gap: 1px;
+  min-width: clamp(68px, 9vw, 96px);
+  border-radius: 0 22px 22px 0;
 }
 .diff-icon { font-size: clamp(14px, 2vw, 20px); line-height: 1; }
 .diff-text { font-size: clamp(12px, 1.6vw, 16px); font-weight: 700; letter-spacing: 0.04em; }
 
 #hud-coins {
-  background: linear-gradient(180deg, #FFE56A, #F5C518 58%, #E6A40C);
-  color: #1B2A4A; border-radius: 999px;
-  border: 3px solid #C98A08;
+  background: #16325C;
+  color: #fff; border-radius: 999px;
+  border: 3px solid #0E2244;
   padding: clamp(10px, 1.2vw, 14px) clamp(14px, 1.8vw, 20px);
   font-weight: 700; font-size: clamp(16px, 2.2vw, 22px);
   display: flex; align-items: center; gap: 8px;
-  box-shadow: 0 4px 0 #B8860B, 0 8px 16px rgba(0,0,0,.18);
+  box-shadow: 0 4px 0 #0A1830, 0 8px 16px rgba(0,0,0,.2);
   flex-shrink: 0;
   min-height: clamp(48px, 6.2vw, 64px);
 }

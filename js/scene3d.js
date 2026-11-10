@@ -149,11 +149,11 @@ export class Scene3D {
       const bx = bgC.getContext('2d');
       // White glow only behind cluster; blue-grey floor elsewhere (#DDE3EA mid, #B9C3CF edges)
       const bg = bx.createRadialGradient(256, 270, 20, 256, 270, 230);
-      bg.addColorStop(0, '#F4F7FA');
-      bg.addColorStop(0.18, '#EEF2F6');
-      bg.addColorStop(0.45, '#E4E9EF');
-      bg.addColorStop(0.75, '#D5DCE4');
-      bg.addColorStop(1, '#C9D1DA');
+      bg.addColorStop(0, '#FFFFFF');
+      bg.addColorStop(0.16, '#F7FBFF');
+      bg.addColorStop(0.38, '#E7EEF5');
+      bg.addColorStop(0.68, '#D3DCE6');
+      bg.addColorStop(1, '#B7C3D0');
       bx.fillStyle = bg;
       bx.fillRect(0, 0, 512, 512);
       const bgTex = new THREE.CanvasTexture(bgC);
@@ -161,7 +161,7 @@ export class Scene3D {
       this.scene.background = bgTex;
     }
 
-    this._camTilt = (22 * Math.PI) / 180;
+    this._camTilt = (15 * Math.PI) / 180;
     this._camDist = 28;
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 120);
 
@@ -170,11 +170,11 @@ export class Scene3D {
     floorCanvas.width = 512; floorCanvas.height = 512;
     const fctx = floorCanvas.getContext('2d');
     const fg = fctx.createRadialGradient(256, 256, 18, 256, 256, 250);
-    fg.addColorStop(0, '#F7FAFC');
-    fg.addColorStop(0.22, '#EEF2F6');
-    fg.addColorStop(0.5, '#E3E8EE');
-    fg.addColorStop(0.78, '#D4DBE3');
-    fg.addColorStop(1, '#C8D0D9');
+    fg.addColorStop(0, '#FFFFFF');
+    fg.addColorStop(0.14, '#F5F9FD');
+    fg.addColorStop(0.36, '#E4ECF4');
+    fg.addColorStop(0.66, '#D0DAE4');
+    fg.addColorStop(1, '#B4C0CE');
     fctx.fillStyle = fg;
     fctx.fillRect(0, 0, 512, 512);
     const floorTex = new THREE.CanvasTexture(floorCanvas);
@@ -190,7 +190,7 @@ export class Scene3D {
 
     this.shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 22),
-      new THREE.ShadowMaterial({ opacity: 0.22 })
+      new THREE.ShadowMaterial({ opacity: 0.40 })
     );
     this.shadowFloor.rotation.x = -Math.PI / 2;
     this.shadowFloor.position.y = 0.008;
@@ -202,7 +202,7 @@ export class Scene3D {
     this.scene.add(this.hemi);
     // High soft key → tight darker contact shadows under ropes
     this.sun = new THREE.DirectionalLight(0xffffff, 1.15);
-    this.sun.position.set(7.5, 24, -6); // upper right → shadows fall down-left
+    this.sun.position.set(2.4, 9.5, -8.5); // low and up-screen so shadows run long, down-left
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.camera.near = 1;
@@ -213,7 +213,7 @@ export class Scene3D {
     this.sun.shadow.camera.bottom = -8;
     this.sun.shadow.bias = -0.00025;
     this.sun.shadow.normalBias = 0.02;
-    this.sun.shadow.radius = 1.15;
+    this.sun.shadow.radius = 2.4;
     this.scene.add(this.sun);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.18));
     const fill = new THREE.DirectionalLight(0xe8f4ff, 0.32);
@@ -250,12 +250,12 @@ export class Scene3D {
     const V = this.VIEW_W;
     // Peg diameter ~0.055W; rope diameter 0.9× peg ≈ 0.05W
     // Peg posts are the tall landmarks; ropes are a little thinner than a peg.
-    this.pegR = (0.050 * V) / 2;
-    this.ropeR = this.pegR * 0.88;
-    this.capR = this.pegR * 1.2;
-    this.capH = this.pegR * 0.36;
-    // Tall enough that, under a 26° view, the post is about 1.6× its diameter on screen.
-    this.pegH = this.pegR * 6.6;
+    // Short stubs. Ropes are about twice as thick as a peg, like the reference.
+    this.pegR = (0.040 * V) / 2;
+    this.ropeR = this.pegR * 1.55;
+    this.capR = this.pegR * 2.15;
+    this.capH = this.pegR * 0.22;
+    this.pegH = this.pegR * 4.2;
   }
 
   resize(cssW, cssH, dpr) {
@@ -545,18 +545,22 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    // Donut ring: the peg top shows through the hole, like the reference caps.
-    const ringR = this.pegR * 0.90;
-    const tube = this.pegR * 0.26;
+    const outer = this.pegR * 2.05;
+    const inner = this.pegR * 0.72;
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(ringR, tube, 14, 40),
+      new THREE.RingGeometry(inner, outer, 40),
       this._capMat(color)
     );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = tube * 0.08;
-    ring.castShadow = true;
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.012;
     ring.receiveShadow = true;
-    group.add(ring);
+    const hole = new THREE.Mesh(
+      new THREE.CircleGeometry(inner * 0.96, 28),
+      new THREE.MeshBasicMaterial({ color: 0x1A2430 })
+    );
+    hole.rotation.x = -Math.PI / 2;
+    hole.position.y = 0.008;
+    group.add(hole, ring);
     group.userData.colorHex = color.hex;
     group.userData.body = ring;
     return group;
@@ -630,11 +634,20 @@ export class Scene3D {
       pts = next;
     }
 
-    // Fixed control count. A length-dependent count made sparsify/fillet
-    // add and drop points, which popped the tube and the braid phase.
-    const targetN = 24;
-    pts = resample2D(pts, targetN);
-    for (let i = 0; i < 3; i++) pts = chaikin(pts);
+    // Fixed count, then a heavy smooth so verlet kinks become wide floor arcs.
+    pts = resample2D(pts, 20);
+    for (let pass = 0; pass < 10; pass++) {
+      const next = pts.map(p => ({ x: p.x, z: p.z }));
+      for (let i = 1; i < pts.length - 1; i++) {
+        next[i].x = pts[i].x * 0.42 + (pts[i - 1].x + pts[i + 1].x) * 0.29;
+        next[i].z = pts[i].z * 0.42 + (pts[i - 1].z + pts[i + 1].z) * 0.29;
+      }
+      next[0] = pts[0];
+      next[next.length - 1] = pts[pts.length - 1];
+      pts = next;
+    }
+    pts = resample2D(pts, 24);
+    for (let i = 0; i < 2; i++) pts = chaikin(pts);
     // Re-pin ends after chaikin/resample (those filters can drift endpoints)
     pts[0] = { x: e0.x, z: e0.z };
     pts[pts.length - 1] = { x: e1.x, z: e1.z };
@@ -643,11 +656,10 @@ export class Scene3D {
     // Attach near resting height (under the magnet disc) — no tall pipe rise.
     // Centerline must clear floor by ≥ ropeR so the full round tube is visible
     // (floorY≈ropeR*1.02 buried the lower half → flat "ribbon" look from above)
-    // Ends meet the ring on the peg top. The middle sags, but stays off the floor
-    // so the rope reads as a hanging braid, not a flat ribbon.
-    const floorY = Math.max(this.ropeR * 1.45, this.pegH * 0.16);
-    const attachYPeg = this.pegH * 0.98;
-    const attachYFloor = Math.max(this.floorCapY() + this.ropeR * 0.2, this.ropeR * 1.6);
+    // Ropes lie on the floor. Ends rise only enough to meet a flat ring.
+    const floorY = this.ropeR * 1.02;
+    const attachYPeg = Math.max(floorY, this.pegH * 0.55);
+    const attachYFloor = this.ropeR * 0.72;
     // Dragged/lifted caps sit high — rope must meet the underside of that cap (not floor)
     const attachOf = (ep) => {
       if (ep && ep.lifted) {
@@ -658,7 +670,7 @@ export class Scene3D {
     };
     const a0 = attachOf(ends[0]);
     const a1 = attachOf(ends[1]);
-    const dropDist = Math.max(this.ropeR * 5.5, this.pegH * 0.85);
+    const dropDist = this.ropeR * 1.6;
     // Insert explicit side-exit points so the tube exits horizontally under the cap
     if (pts.length >= 2) {
       const d0 = Math.hypot(pts[1].x - pts[0].x, pts[1].z - pts[0].z) || 1;
@@ -762,7 +774,8 @@ export class Scene3D {
       const layer = Math.min(3, (rs.z || i) % 4);
       // Rest on floor; stacking only via crossing lifts (~1 rope thickness)
       const baseY = this.ropeR * 1.28;
-      const shown = displayPoints(rs);
+      const guided = rs._guide && !rs._dragging && !rs._playerTouched && !rs.clearing;
+      const shown = guided ? rs._guide : displayPoints(rs);
       const srcPts = (shown && shown.length >= 2) ? shown : rs._wrapPath;
       if (!srcPts || srcPts.length < 2) { built.push(null); continue; }
       const stretch = rs.stretch || 1;
@@ -785,7 +798,7 @@ export class Scene3D {
             if (!hit) continue;
             const stack = (built[hi].layer - built[lo].layer) + 1;
             // Soft stacked contact — upper rope rests on lower with gentle height
-            const liftAmt = 2 * this.ropeR * Math.max(1, stack) * 1.05;
+            const liftAmt = this.ropeR * 0.95 * Math.max(1, stack);
             const influence = this.ropeR * 5.0;
             for (let k = 1; k < A.length - 1; k++) { // never lift endpoints off magnet caps
               const d = Math.hypot(A[k].x - hit.x, A[k].z - hit.z);
@@ -946,7 +959,7 @@ export class Scene3D {
           const d = new THREE.Vector3().subVectors(inward, end);
           if (d.lengthSq() < 1e-8) return end.clone();
           d.normalize();
-          return end.clone().addScaledVector(d, Math.min(this.ropeR * 0.22, this.capR * 0.18));
+          return end.clone().addScaledVector(d, this.ropeR * 0.75);
         };
         const inner0 = filleted[Math.min(1, filleted.length - 1)];
         const inner1 = filleted[Math.max(0, filleted.length - 2)];
@@ -957,7 +970,7 @@ export class Scene3D {
         if (filleted[0].distanceTo(filleted[filleted.length - 1]) < this.ropeR * 0.15) {
           filleted[filleted.length - 1] = cap1.clone().add(new THREE.Vector3(0.05, 0, 0.02));
         }
-        filleted = enforceMinBendWorld(filleted, this.ropeR * 1.55);
+        filleted = enforceMinBendWorld(filleted, this.ropeR * 1.7);
         filleted[0] = insetEnd(cap0, filleted[Math.min(1, filleted.length - 1)]);
         filleted[filleted.length - 1] = insetEnd(cap1, filleted[Math.max(0, filleted.length - 2)]);
         if (filleted.length >= 3) {
@@ -986,8 +999,9 @@ export class Scene3D {
           }
         }
         if (newGeom.userData && newGeom.userData.hintN) entry._hintN = newGeom.userData.hintN;
-        entry.mesh.geometry.dispose();
+        const oldGeom = entry.mesh.geometry;
         entry.mesh.geometry = newGeom;
+        oldGeom.dispose();
         entry.geom = newGeom;
         entry.mesh.renderOrder = b.layer;
         entry._end0 = cap0.clone();
@@ -1022,7 +1036,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 2.6 * (2 * this.ropeR);
+          const period = 3.4 * (2 * this.ropeR);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
