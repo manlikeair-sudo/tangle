@@ -26,8 +26,8 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
     // Tight 3-ply: crests every 0.4 rope-widths along the rope, displaced in the surface.
     // One crest every ~1.1 rope widths, so the three plies read as diagonals.
     const plyPitch = Math.max(radius * 2 * 1.1, 1e-4);
-    const amp = 0.16;
-    const tilt = 0.85;
+    const amp = 0.045;
+    const tilt = 1.15;
     const sAt = new Array(tubular + 1);
     sAt[0] = 0;
     for (let i = 1; i <= tubular; i++) {
@@ -275,7 +275,7 @@ export class Scene3D {
     // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
     // Visible rope diameter 44px. Ply displacement adds 11%, so the base is smaller.
     this.ropeOuter = 44 / (2 * (894 / 10));
-    this.ropeR = this.ropeOuter / 1.16;
+    this.ropeR = this.ropeOuter / 1.045;
     this.pegR = 33 / (2 * (894 / 10));
     this.capR = this.ropeOuter;
     this.capH = 0.22 * (2 * this.ropeR);
