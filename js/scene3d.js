@@ -448,9 +448,9 @@ export class Scene3D {
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
       normalMap: nrm,
-      normalScale: new THREE.Vector2(0.45, 0.45),
+      normalScale: new THREE.Vector2(1.15, 1.15),
       color: 0xffffff,
-      roughness: 0.68,
+      roughness: 0.32,
       metalness: 0.0,
       emissive: baseCol.clone().multiplyScalar(0.08),
       emissiveIntensity: 1,
@@ -1258,7 +1258,8 @@ export class Scene3D {
 
   /** Screen position of a cap sitting on a peg (for picking). */
   projectCapOnPeg(peg) {
-    if (peg && peg.pixelLock) {
+    if (!peg) return { x: 0, y: 0 };
+    if (peg.pixelLock) {
       const w = this.screenToWorld(peg.x, peg.y, this.pegH);
       return this.projectWorld(w.x, this.pegH, w.z);
     }

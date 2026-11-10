@@ -156,6 +156,16 @@ function loadLevel(idx) {
     rs.retracting = false;
   }
   syncRopeEndsFromStacks();
+  if (level.showcase) {
+    for (const rs of ropeStates) {
+      if (!rs.path || rs.path.length < 2) continue;
+      const a = rs.path[0], b = rs.path[rs.path.length - 1];
+      rs._ends = [
+        { pegId: -1, x: a[0] * W, y: a[1] * H },
+        { pegId: -1, x: b[0] * W, y: b[1] * H },
+      ];
+    }
+  }
   const clear = PEG_R + ROPE_W * 0.7 + 6;
   for (const rs of ropeStates) {
     const ends = endPositions(rs.id);
@@ -207,7 +217,6 @@ function loadLevel(idx) {
     dIcon.textContent = '😼'; dText.textContent = 'MED';
     diff.style.background = 'linear-gradient(180deg,#FCD34D,#D97706 55%,#B45309)';
   } else {
-    dIcon.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#fff" d="M5.2 9.2 3.2 4.2l3.4 2.2C8 5.2 9.9 4.4 12 4.4s4 .8 5.4 2L20.8 4.2l-2 5c.8 1.1 1.2 2.4 1.2 3.8 0 4.2-3.6 7.6-8 7.6s-8-3.4-8-7.6c0-1.4.4-2.7 1.2-3.8z"/><circle cx="9.2" cy="11.4" r="1.15" fill="#4C1D95"/><circle cx="14.8" cy="11.4" r="1.15" fill="#4C1D95"/><path d="M10 14.6c.55.45 1.25.7 2 .7s1.45-.25 2-.7" fill="none" stroke="#4C1D95" stroke-width="1.15" stroke-linecap="round"/></svg>';
     dText.textContent = 'HARD';
     diff.style.background = 'linear-gradient(180deg,#C084FC,#7C3AED 55%,#6D28D9)';
   }
