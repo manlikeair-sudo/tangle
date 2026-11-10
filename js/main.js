@@ -80,8 +80,7 @@ window.addEventListener('resize', resize);
 function layShowcasePath(rs) {
   const src = rs.path;
   if (!src || src.length < 2 || !rs.points) return;
-  const ropeShift = (scene.ropeR * 1.05) * (W / scene.VIEW_W) * Math.sin(scene._camTilt);
-  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H + ropeShift }));
+  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H }));
   const seg = [];
   let total = 0;
   for (let i = 1; i < pix.length; i++) {
@@ -133,13 +132,11 @@ function layoutPegs() {
     const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
     boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
   }
-  const kProj = (W / scene.VIEW_W) * Math.sin(scene._camTilt);
-  const ropeShift = (level.showcase && !(W > H)) ? scene.ropeR * 1.05 * kProj : 0;
-  const pegTopShift = (level.showcase && !(W > H)) ? scene.pegH * kProj : 0;
+  const pixelLock = !!(level.showcase && !(W > H));
   for (const p of pegs) {
     p.x = boardOX + p.nx * boardW;
-    const shift = p.anchor === 'top' ? pegTopShift : ropeShift;
-    p.y = boardOY + p.ny * boardH + shift;
+    p.y = boardOY + p.ny * boardH;
+    p.pixelLock = pixelLock;
   }
   scene.setBoardLayout(boardOX, boardOY, boardW, boardH, !!(level && level.showcase && !(W > H)));
 }

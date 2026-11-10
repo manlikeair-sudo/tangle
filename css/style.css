@@ -100,7 +100,7 @@ html, body {
   min-width: 84px;
   border-radius: 0;
 }
-.cat-svg { width: 46px; height: 46px; display: block; }
+.cat-svg { width: 64px; height: 64px; min-width: 64px; min-height: 64px; display: block; }
 .diff-text { font-size: 16px; font-weight: 700; letter-spacing: 0.06em; }
 
 #hud-coins {

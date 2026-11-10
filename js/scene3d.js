@@ -254,11 +254,12 @@ export class Scene3D {
     // Peg diameter matches the reference stubs. Rope width is about 0.9× that.
     // Screen target on an 894-wide frame: peg top ~31px, rope ~31px (measured, then scaled).
     // Tuned so an 894px-wide frame measures: peg top ~32px, rope ~42px (reference inscribed widths).
-    this.pegR = 0.194;
-    this.ropeR = 0.275;
-    this.capR = this.ropeR * 1.08;
-    this.capH = this.ropeR * 0.16;
-    this.pegH = this.pegR * 7.0;
+    // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
+    this.ropeR = 41 / (2 * (894 / 10));
+    this.pegR = 33 / (2 * (894 / 10));
+    this.capR = this.ropeR * 1.30;
+    this.capH = 0.35 * (2 * this.ropeR);
+    this.pegH = 1.6 * (2 * this.ropeR);
   }
 
   resize(cssW, cssH, dpr) {
@@ -307,19 +308,21 @@ export class Scene3D {
    * Raycast CSS-pixel pointer through the ortho camera onto a world Y plane,
    * return board/CSS coords. Accounts for tilt + aspect (1:1 finger tracking).
    */
-  screenToBoard(sx, sy, planeY = 0) {
+  screenToWorld(sx, sy, planeY = 0) {
+    this.camera.updateMatrixWorld(true);
     const ndcX = (sx / Math.max(1, this.W)) * 2 - 1;
     const ndcY = -(sy / Math.max(1, this.H)) * 2 + 1;
     const near = new THREE.Vector3(ndcX, ndcY, -1).unproject(this.camera);
     const far = new THREE.Vector3(ndcX, ndcY, 1).unproject(this.camera);
-    const dir = far.sub(near);
-    if (Math.abs(dir.y) < 1e-8) {
-      return this.fromWorld(near.x, near.z);
-    }
+    const dir = far.clone().sub(near);
+    if (Math.abs(dir.y) < 1e-8) return new THREE.Vector3(near.x, planeY, near.z);
     const t = (planeY - near.y) / dir.y;
-    const hx = near.x + dir.x * t;
-    const hz = near.z + dir.z * t;
-    return this.fromWorld(hx, hz);
+    return new THREE.Vector3(near.x + dir.x * t, planeY, near.z + dir.z * t);
+  }
+
+  screenToBoard(sx, sy, planeY = 0) {
+    const w = this.screenToWorld(sx, sy, planeY);
+    return this.fromWorld(w.x, w.z);
   }
 
   /** Project a board-space point at a given world Y (cap center). */
@@ -479,7 +482,7 @@ export class Scene3D {
     dark.addColorStop(1, '#120808');
     ctx.fillStyle = dark; ctx.fill();
     ctx.beginPath(); ctx.arc(cx, cy, 23, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.strokeStyle = color.dark; ctx.lineWidth = 1.1; ctx.stroke();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     const base = new THREE.Color(color.hex);
@@ -527,19 +530,24 @@ export class Scene3D {
       ao.rotation.x = -Math.PI / 2;
       ao.position.y = 0.015;
       ao.renderOrder = 1;
-      body.renderOrder = 16;
-      top.renderOrder = 18;
-      rim.renderOrder = 18;
+      body.renderOrder = 5;
+      top.renderOrder = 6;
+      rim.renderOrder = 6;
       group.add(ao, body, top, rim);
       group.userData.body = body;
       this.scene.add(group);
       this.pegs.push(group);
     }
     for (let i = 0; i < pegList.length; i++) {
-      const w = this.toWorld(pegList[i].x, pegList[i].y);
       const m = this.pegs[i];
       const dip = this._pegDip.get(pegList[i].id) || 0;
-      m.position.set(w.x, -dip, w.z);
+      if (pegList[i].pixelLock) {
+        const w = this.screenToWorld(pegList[i].x, pegList[i].y, this.pegH);
+        m.position.set(w.x, -dip, w.z);
+      } else {
+        const w = this.toWorld(pegList[i].x, pegList[i].y);
+        m.position.set(w.x, -dip, w.z);
+      }
       m.visible = true;
     }
   }
@@ -615,20 +623,23 @@ export class Scene3D {
     return entry.endCaps;
   }
 
-  /** Traced centerline: keep the S-bends, lay the tube on the floor. */
-  _traceWorldPts(raw, ends) {
-    let pts = raw.map(p => {
-      const w = this.toWorld(p.x, p.y);
-      return { x: w.x, z: w.z };
-    });
-    if (pts.length > 42) pts = resample2D(pts, 36);
-    else if (pts.length < 18) pts = resample2D(pts, 24);
-    const e0 = this.toWorld(ends[0].x, ends[0].y);
-    const e1 = this.toWorld(ends[1].x, ends[1].y);
-    pts[0] = { x: e0.x, z: e0.z };
-    pts[pts.length - 1] = { x: e1.x, z: e1.z };
-    const floorY = this.ropeR * 1.05;
-    return pts.map(p => new THREE.Vector3(p.x, floorY, p.z));
+  /** Screen-pixel centerline, raycast onto the rope plane so it projects back onto those pixels. */
+  _traceWorldPts(raw) {
+    const planeY = this.ropeR;
+    const dense = [];
+    const src = raw.filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (src.length < 2) return [];
+    for (let i = 0; i < src.length - 1; i++) {
+      const a = src[i], b = src[i + 1];
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      const n = Math.max(1, Math.round(d / 6));
+      for (let k = 0; k < n; k++) {
+        const t = k / n;
+        dense.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    }
+    dense.push(src[src.length - 1]);
+    return dense.map(p => this.screenToWorld(p.x, p.y, planeY));
   }
 
   /** Clean control points for TubeGeometry. */
@@ -950,7 +961,7 @@ export class Scene3D {
             }
             mesh.visible = true;
             mesh.renderOrder = 12;
-            const topY = ep.onFloor ? this.floorCapY() : this.pegH;
+            const topY = (ep && ep.lifted) ? this.pegH : 0;
             mesh.position.set(attach.x, topY, attach.z);
             mesh.scale.set(1, 1, 1);
             // Plug open mouth under the magnet
@@ -1139,7 +1150,7 @@ export class Scene3D {
             mesh.material.opacity = fade;
           }
         } else {
-          const topY = ep.onFloor ? this.floorCapY() : this.pegH;
+          const topY = (ep && ep.lifted) ? this.pegH : 0;
           mesh.position.set(attach.x, topY, attach.z);
           mesh.scale.set(sxz, sy, sxz);
           if (mesh.material) {
@@ -1247,8 +1258,25 @@ export class Scene3D {
 
   /** Screen position of a cap sitting on a peg (for picking). */
   projectCapOnPeg(peg) {
+    if (peg && peg.pixelLock) {
+      const w = this.screenToWorld(peg.x, peg.y, this.pegH);
+      return this.projectWorld(w.x, this.pegH, w.z);
+    }
     const w = this.toWorld(peg.x, peg.y);
     return this.projectWorld(w.x, this.pegH + this.capH * 0.5, w.z);
+  }
+
+  /** Mean screen error of authored pixels after raycast onto the rope plane. */
+  centerlineError(screenPts) {
+    if (!screenPts || screenPts.length < 2) return 0;
+    const y = this.ropeR;
+    let sum = 0;
+    for (const p of screenPts) {
+      const w = this.screenToWorld(p.x, p.y, y);
+      const s = this.projectWorld(w.x, y, w.z);
+      sum += Math.hypot(s.x - p.x, s.y - p.y);
+    }
+    return sum / screenPts.length;
   }
 
   /** On-screen radius of a cap in CSS pixels. */
