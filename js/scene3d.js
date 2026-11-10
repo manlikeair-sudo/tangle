@@ -149,12 +149,11 @@ export class Scene3D {
       const bx = bgC.getContext('2d');
       // White glow only behind cluster; blue-grey floor elsewhere (#DDE3EA mid, #B9C3CF edges)
       const bg = bx.createRadialGradient(256, 270, 20, 256, 270, 230);
-      bg.addColorStop(0, '#FFFFFF');
-      bg.addColorStop(0.10, '#F7FAFC');
-      bg.addColorStop(0.28, '#DDE3EA');
-      bg.addColorStop(0.55, '#C5CDD8');
-      bg.addColorStop(0.78, '#B9C3CF');
-      bg.addColorStop(1, '#A8B2BE');
+      bg.addColorStop(0, '#F4F7FA');
+      bg.addColorStop(0.18, '#EEF2F6');
+      bg.addColorStop(0.45, '#E4E9EF');
+      bg.addColorStop(0.75, '#D5DCE4');
+      bg.addColorStop(1, '#C9D1DA');
       bx.fillStyle = bg;
       bx.fillRect(0, 0, 512, 512);
       const bgTex = new THREE.CanvasTexture(bgC);
@@ -162,7 +161,7 @@ export class Scene3D {
       this.scene.background = bgTex;
     }
 
-    this._camTilt = (16 * Math.PI) / 180;
+    this._camTilt = (22 * Math.PI) / 180;
     this._camDist = 28;
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 120);
 
@@ -171,12 +170,11 @@ export class Scene3D {
     floorCanvas.width = 512; floorCanvas.height = 512;
     const fctx = floorCanvas.getContext('2d');
     const fg = fctx.createRadialGradient(256, 256, 18, 256, 256, 250);
-    fg.addColorStop(0, '#FFFFFF');
-    fg.addColorStop(0.12, '#F5F8FB');
-    fg.addColorStop(0.32, '#DDE3EA');
-    fg.addColorStop(0.58, '#C5CDD8');
-    fg.addColorStop(0.82, '#B9C3CF');
-    fg.addColorStop(1, '#A8B2BE');
+    fg.addColorStop(0, '#F7FAFC');
+    fg.addColorStop(0.22, '#EEF2F6');
+    fg.addColorStop(0.5, '#E3E8EE');
+    fg.addColorStop(0.78, '#D4DBE3');
+    fg.addColorStop(1, '#C8D0D9');
     fctx.fillStyle = fg;
     fctx.fillRect(0, 0, 512, 512);
     const floorTex = new THREE.CanvasTexture(floorCanvas);
@@ -192,7 +190,7 @@ export class Scene3D {
 
     this.shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 22),
-      new THREE.ShadowMaterial({ opacity: 0.30 })
+      new THREE.ShadowMaterial({ opacity: 0.22 })
     );
     this.shadowFloor.rotation.x = -Math.PI / 2;
     this.shadowFloor.position.y = 0.008;
@@ -204,7 +202,7 @@ export class Scene3D {
     this.scene.add(this.hemi);
     // High soft key → tight darker contact shadows under ropes
     this.sun = new THREE.DirectionalLight(0xffffff, 1.15);
-    this.sun.position.set(3.5, 22, -2.5); // more side angle for tube form
+    this.sun.position.set(7.5, 24, -6); // upper right → shadows fall down-left
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.camera.near = 1;
@@ -251,15 +249,13 @@ export class Scene3D {
   _applyTargetProportions() {
     const V = this.VIEW_W;
     // Peg diameter ~0.055W; rope diameter 0.9× peg ≈ 0.05W
-    this.pegR = (0.055 * V) / 2;
-    // Rope diameter ≈ 1.05× peg diameter → chunky
-    this.ropeR = this.pegR * 1.10;
-    // Cap slightly wider than peg — thick saturated disc
-    this.capR = this.pegR * 1.25;
-    this.capH = this.pegR * 0.42;
-    // Visible peg height ≈ 1.2× peg diameter
-    // World height tuned so screen pegHvis ≈ 1.2× pegD under ~16° ortho tilt
-    this.pegH = this.pegR * 2 * 0.38 * 3.6; // screen pegHvis ≈ 0.38× pegD — short glossy like reference
+    // Peg posts are the tall landmarks; ropes are a little thinner than a peg.
+    this.pegR = (0.050 * V) / 2;
+    this.ropeR = this.pegR * 0.88;
+    this.capR = this.pegR * 1.2;
+    this.capH = this.pegR * 0.36;
+    // Tall enough that, under a 26° view, the post is about 1.6× its diameter on screen.
+    this.pegH = this.pegR * 6.6;
   }
 
   resize(cssW, cssH, dpr) {
@@ -443,10 +439,10 @@ export class Scene3D {
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
       normalMap: nrm,
-      normalScale: new THREE.Vector2(0.62, 0.62),
+      normalScale: new THREE.Vector2(1.05, 1.05),
       color: 0xffffff,
-      roughness: 0.40,
-      metalness: 0.0,
+      roughness: 0.32,
+      metalness: 0.05,
       emissive: baseCol.clone().multiplyScalar(0.08),
       emissiveIntensity: 1,
     });
@@ -499,14 +495,14 @@ export class Scene3D {
     while (this.pegs.length < pegList.length) {
       const group = new THREE.Group();
       const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 0.98, this.pegR * 1.06, this.pegH, 48),
+        new THREE.CylinderGeometry(this.pegR * 0.96, this.pegR * 1.02, this.pegH, 40),
         this._pegMat()
       );
       body.castShadow = true;
       body.receiveShadow = true;
       body.position.y = this.pegH * 0.5;
       const top = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 1.01, this.pegR * 1.01, this.pegH * 0.05, 48),
+        new THREE.CylinderGeometry(this.pegR * 1.08, this.pegR * 1.08, this.pegH * 0.045, 40),
         this._pegTopMat()
       );
       top.position.y = this.pegH - this.pegH * 0.02;
@@ -549,29 +545,20 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(this.capR, this.capR * 1.02, this.capH, 40),
+    // Donut ring: the peg top shows through the hole, like the reference caps.
+    const ringR = this.pegR * 0.90;
+    const tube = this.pegR * 0.26;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(ringR, tube, 14, 40),
       this._capMat(color)
     );
-    body.castShadow = true;
-    body.receiveShadow = true;
-    body.position.y = this.capH * 0.5;
-    // Glossy top ring (annulus look via texture) + slight bevel rim
-    const top = new THREE.Mesh(
-      new THREE.CylinderGeometry(this.capR * 0.99, this.capR * 0.99, this.capH * 0.1, 40),
-      this._capMat(color)
-    );
-    top.position.y = this.capH * 0.95;
-    top.castShadow = true;
-    const bevel = new THREE.Mesh(
-      new THREE.TorusGeometry(this.capR * 0.92, this.capR * 0.06, 8, 40),
-      this._capMat(color)
-    );
-    bevel.rotation.x = Math.PI / 2;
-    bevel.position.y = this.capH * 0.92;
-    group.add(body, top, bevel);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = tube * 0.08;
+    ring.castShadow = true;
+    ring.receiveShadow = true;
+    group.add(ring);
     group.userData.colorHex = color.hex;
-    group.userData.body = body;
+    group.userData.body = ring;
     return group;
   }
 
@@ -647,7 +634,7 @@ export class Scene3D {
     // add and drop points, which popped the tube and the braid phase.
     const targetN = 24;
     pts = resample2D(pts, targetN);
-    for (let i = 0; i < 2; i++) pts = chaikin(pts);
+    for (let i = 0; i < 3; i++) pts = chaikin(pts);
     // Re-pin ends after chaikin/resample (those filters can drift endpoints)
     pts[0] = { x: e0.x, z: e0.z };
     pts[pts.length - 1] = { x: e1.x, z: e1.z };
@@ -656,9 +643,11 @@ export class Scene3D {
     // Attach near resting height (under the magnet disc) — no tall pipe rise.
     // Centerline must clear floor by ≥ ropeR so the full round tube is visible
     // (floorY≈ropeR*1.02 buried the lower half → flat "ribbon" look from above)
-    const floorY = this.ropeR * 1.28; // keep full round tube above floor (no flat-stick)
-    const attachYPeg = Math.max(this.ropeR * 1.5, this.pegH * 0.88);
-    const attachYFloor = Math.max(this.floorCapY() * 0.85, this.ropeR * 1.35);
+    // Ends meet the ring on the peg top. The middle sags, but stays off the floor
+    // so the rope reads as a hanging braid, not a flat ribbon.
+    const floorY = Math.max(this.ropeR * 1.45, this.pegH * 0.16);
+    const attachYPeg = this.pegH * 0.98;
+    const attachYFloor = Math.max(this.floorCapY() + this.ropeR * 0.2, this.ropeR * 1.6);
     // Dragged/lifted caps sit high — rope must meet the underside of that cap (not floor)
     const attachOf = (ep) => {
       if (ep && ep.lifted) {
@@ -669,7 +658,7 @@ export class Scene3D {
     };
     const a0 = attachOf(ends[0]);
     const a1 = attachOf(ends[1]);
-    const dropDist = this.ropeR * 3.6; // ~1.8 rope diameters — natural cap→floor drape
+    const dropDist = Math.max(this.ropeR * 5.5, this.pegH * 0.85);
     // Insert explicit side-exit points so the tube exits horizontally under the cap
     if (pts.length >= 2) {
       const d0 = Math.hypot(pts[1].x - pts[0].x, pts[1].z - pts[0].z) || 1;
@@ -1033,7 +1022,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 1.8 * (2 * this.ropeR);
+          const period = 2.6 * (2 * this.ropeR);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {

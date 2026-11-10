@@ -1,8 +1,6 @@
 /**
- * Helix3-style crisp 3-strand diagonal helix (reference-like).
- * max(3 cos @ 120°) remapped [0.5,1]→[0,1] so grooves actually appear.
- * Groove ~42%, crest ~128%. No spatial blur — filtering off in scene.
- * Period: 1 UV = 1 twist → 3 strand bumps; uRepeat = len/(1.8·D) → ~0.6D.
+ * Two-strand candy-cane braid, like the reference ropes.
+ * |cos| gives two equal glossy strands per twist. 1 UV = 1 full twist.
  */
 export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const c = document.createElement('canvas');
@@ -25,23 +23,19 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
       const ang = (v - twists * u) * Math.PI * 2;
-      const s0 = Math.cos(ang);
-      const s1 = Math.cos(ang + (Math.PI * 2) / 3);
-      const s2 = Math.cos(ang + (Math.PI * 4) / 3);
-      const peak = Math.max(s0, s1, s2); // 0.5 .. 1.0
-      // Remap to 0..1 so valleys hit groove and peaks hit crest
-      let t = (peak - 0.5) * 2; // 0 .. 1
-      // Sharper valleys, soft rounded strand crests
-      t = Math.pow(Math.max(0, Math.min(1, t)), 0.7);
+      // Two fat strands: |cos| peaks twice per turn.
+      let t = Math.abs(Math.cos(ang));
+      // Fat strands, thin groove — a candy-cane, not a barcode.
+      t = Math.pow(Math.max(0, Math.min(1, t)), 0.32);
       let r, g, b;
-      if (t < 0.38) {
-        const k = t / 0.38;
+      if (t < 0.22) {
+        const k = t / 0.22;
         const k2 = k * k * (3 - 2 * k);
         r = grooveR + (cr - grooveR) * k2;
         g = grooveG + (cg - grooveG) * k2;
         b = grooveB + (cb - grooveB) * k2;
       } else {
-        const k = (t - 0.38) / 0.62;
+        const k = (t - 0.22) / 0.78;
         const k2 = k * k * (3 - 2 * k);
         r = cr + (crestR - cr) * k2;
         g = cg + (crestG - cg) * k2;
@@ -74,12 +68,10 @@ export function makeBraidNormalCanvas(size = 512) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
       const ang = (v - twists * u) * Math.PI * 2;
-      // height ≈ remapped max of 3 cosines; finite-diff for normal
       const eps = 1 / size;
       const h = (uu, vv) => {
         const a = (vv - twists * uu) * Math.PI * 2;
-        const peak = Math.max(Math.cos(a), Math.cos(a + 2.094395), Math.cos(a + 4.188790));
-        return Math.pow(Math.max(0, Math.min(1, (peak - 0.5) * 2)), 0.7);
+        return Math.pow(Math.abs(Math.cos(a)), 0.32);
       };
       const dhdu = (h(u + eps, v) - h(u - eps, v)) / (2 * eps);
       const dhdv = (h(u, v + eps) - h(u, v - eps)) / (2 * eps);
