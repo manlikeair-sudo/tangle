@@ -252,11 +252,13 @@ export class Scene3D {
     // Peg posts are the tall landmarks; ropes are a little thinner than a peg.
     // Short stubs. Ropes are about twice as thick as a peg, like the reference.
     // Peg diameter matches the reference stubs. Rope width is about 0.9× that.
-    this.pegR = (0.0336 * V) / 2;
-    this.ropeR = this.pegR * 0.90;
-    this.capR = this.ropeR * 1.05;
+    // Screen target on an 894-wide frame: peg top ~31px, rope ~31px (measured, then scaled).
+    // Tuned so an 894px-wide frame measures: peg top ~32px, rope ~42px (reference inscribed widths).
+    this.pegR = 0.194;
+    this.ropeR = 0.275;
+    this.capR = this.ropeR * 1.08;
     this.capH = this.ropeR * 0.16;
-    this.pegH = this.pegR * 2.8;
+    this.pegH = this.pegR * 4.2;
   }
 
   resize(cssW, cssH, dpr) {
@@ -549,8 +551,8 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    const outer = this.ropeR * 1.02;
-    const inner = this.ropeR * 0.34;
+    const outer = this.capR;
+    const inner = this.ropeR * 0.42;
     const outline = new THREE.Mesh(
       new THREE.RingGeometry(outer * 0.96, outer * 1.16, 40),
       new THREE.MeshBasicMaterial({ color: 0x1A2430 })

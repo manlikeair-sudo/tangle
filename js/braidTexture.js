@@ -41,8 +41,8 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
         b = cb + (crestB - cb) * k2;
       }
       // Dark rim toward the silhouette of the tube.
-      const edge = Math.pow(Math.sin(v * Math.PI), 0.42);
-      const wrap = 0.28 + 0.72 * edge;
+      const rim = Math.sin(v * Math.PI);
+      const wrap = 0.58 + 0.42 * Math.pow(rim, 0.65);
       r *= wrap; g *= wrap; b *= wrap;
 
       const i = (y * size + x) * 4;

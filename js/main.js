@@ -42,7 +42,7 @@ let lastTouchedRopeId = null; // only touched / cascade-eligible ropes may clear
 const CASCADE_GAP = 0.4; // seconds after pop before next clear may start
 const CLEAR_SETTLE_NEED = 0.35; // wait after action before counting freeT
 
-const RETRACT_DUR = 0.2;
+const RETRACT_DUR = 0.32;
 const SNAP_DUR = 0.12; // ~120 ms, matching the reference snap onto a peg
 const LIFT_DUR = 0.08; // magnetic pop lift
 const FOLLOW_BASE = 0.97; // ref: nearly 1:1 finger tracking
@@ -80,7 +80,8 @@ window.addEventListener('resize', resize);
 function layShowcasePath(rs) {
   const src = rs.path;
   if (!src || src.length < 2 || !rs.points) return;
-  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H }));
+  const ropeShift = (scene.ropeR * 1.05) * (W / scene.VIEW_W) * Math.sin(scene._camTilt);
+  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H + ropeShift }));
   const seg = [];
   let total = 0;
   for (let i = 1; i < pix.length; i++) {
@@ -132,9 +133,12 @@ function layoutPegs() {
     const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
     boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
   }
+  const pegShift = (level.showcase && !(W > H))
+    ? scene.pegH * (W / scene.VIEW_W) * Math.sin(scene._camTilt)
+    : 0;
   for (const p of pegs) {
     p.x = boardOX + p.nx * boardW;
-    p.y = boardOY + p.ny * boardH;
+    p.y = boardOY + p.ny * boardH + pegShift;
   }
   scene.setBoardLayout(boardOX, boardOY, boardW, boardH, !!(level && level.showcase && !(W > H)));
 }
