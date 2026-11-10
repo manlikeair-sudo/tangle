@@ -454,13 +454,13 @@ export class Scene3D {
     nrm.wrapT = THREE.RepeatWrapping;
     nrm.repeat.set(8, 1);
     const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color.light),
+      color: new THREE.Color(color.hex),
       normalMap: nrm,
-      normalScale: new THREE.Vector2(1.6, 1.6),
-      roughness: 0.32,
-      metalness: 0.08,
+      normalScale: new THREE.Vector2(0.55, 0.55),
+      roughness: 0.5,
+      metalness: 0.0,
       emissive: new THREE.Color(color.hex),
-      emissiveIntensity: 0.2,
+      emissiveIntensity: 0.06,
     });
     this.texCache.set(key, mat);
     return mat;

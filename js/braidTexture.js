@@ -51,7 +51,7 @@ export function makeBraidNormalCanvas(size = 512) {
   const img = ctx.createImageData(size, size);
   const d = img.data;
   const along = 1;
-  const strength = 3.2;
+  const strength = 1.35;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;

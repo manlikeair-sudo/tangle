@@ -3,7 +3,7 @@ import { generateLevel, LEVEL_COUNT } from './levels.js';
 import { makeRopeState, initPoints, simulateRope, wrapPolyline, captureRest, wakeRope } from './rope.js';
 import { Scene3D } from './scene3d.js';
 import { Particles } from './particles2d.js';
-import { ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
+import { polylinesCross, ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
 
 const canvas = document.getElementById('game');
 const fxCanvas = document.getElementById('fx');
@@ -757,16 +757,21 @@ function evaluateFrees() {
 }
 
 function startClear(rs) {
+  const leaving = (rs.points || []).map(p => ({ x: p.x, y: p.y }));
   rs.clearing = true;
   rs.clearT = 0;
   rs.retracting = true;
   rs._clearStartedAt = performance.now();
   // Stagger: next rope may clear only after this pop finishes + CASCADE_GAP
   nextClearAllowedAt = performance.now() + (RETRACT_DUR + CASCADE_GAP) * 1000;
-  // Legit cascade: other ropes that are now visually free (this was their only crosser)
+  // Only a rope this one was actually crossing can cascade, and only if
+  // nothing else still crosses it. Untouched ropes are not cleared.
   for (let i = 0; i < ropeStates.length; i++) {
     const o = ropeStates[i];
     if (o.clearing || o.id === rs.id) continue;
+    const ptsO = getSettledPolyline(o);
+    if (!ptsO || leaving.length < 2) continue;
+    if (!polylinesCross(ptsO, leaving, getEndPegs(o), getEndPegs(rs), PEG_R * 0.95)) continue;
     if (!ropeVisuallyCrossed(i)) o._cascadeEligible = true;
   }
   // Remove both caps from pegs
