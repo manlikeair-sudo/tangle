@@ -27,11 +27,11 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
       let r = sr + (lit[0] - sr) * t;
       let g = sg + (lit[1] - sg) * t;
       let b = sb + (lit[2] - sb) * t;
-      if (t > 0.9) {
-        const h = (t - 0.9) / 0.1;
-        r += (255 - r) * h * 0.28;
-        g += (255 - g) * h * 0.28;
-        b += (255 - b) * h * 0.28;
+      if (t > 0.92) {
+        const h = (t - 0.92) / 0.08;
+        r += (255 - r) * h * 0.12;
+        g += (255 - g) * h * 0.12;
+        b += (255 - b) * h * 0.12;
       }
       const i = (y * size + x) * 4;
       d[i] = Math.min(255, Math.max(0, r));

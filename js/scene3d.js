@@ -3,7 +3,7 @@
  * No logarithmicDepthBuffer (iOS). Crossing lifts via real Y offsets.
  */
 import * as THREE from '../vendor/three.module.js';
-import { makeBraidNormalCanvas } from './braidTexture.js';
+import { makeBraidCanvas, makeBraidNormalCanvas } from './braidTexture.js';
 import { displayPoints } from './rope.js';
 
 const TUBE_SEGMENTS = 96;
@@ -27,7 +27,7 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
     // Tight 3-ply: crests every 0.4 rope-widths along the rope, displaced in the surface.
     // One crest every ~1.1 rope widths, so the three plies read as diagonals.
     const plyPitch = Math.max(radius * 2 * 1.1, 1e-4);
-    const amp = 0.02;
+    const amp = 0;
     const tilt = 0.35;
     const sAt = new Array(tubular + 1);
     sAt[0] = 0;
@@ -442,6 +442,17 @@ export class Scene3D {
     if (this.texCache.has(key)) return this.texCache.get(key);
     // Solid rope colour. The 3-ply shape is in the displaced vertices, so the
     // highlight and the groove come from the light, not from a painted stripe.
+    const shade = (hex, f) => {
+      const n = parseInt(hex.slice(1), 16);
+      const ch = (s) => Math.max(0, Math.min(255, Math.round(((n >> s) & 255) * f)));
+      return '#' + [16, 8, 0].map(s => ch(s).toString(16).padStart(2, '0')).join('');
+    };
+    const canvas = makeBraidCanvas(color.hex, shade(color.hex, 0.62), shade(color.hex, 1.08), 512);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.repeat.set(8, 1);
     if (!this._braidNormal) {
       const nc = makeBraidNormalCanvas(512);
       this._braidNormal = new THREE.CanvasTexture(nc);
@@ -453,14 +464,14 @@ export class Scene3D {
     nrm.wrapS = THREE.RepeatWrapping;
     nrm.wrapT = THREE.RepeatWrapping;
     nrm.repeat.set(8, 1);
+    // Opaque saturated body. Grooves are a darker shade of the same hue.
     const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(color.hex),
+      map: tex,
+      color: 0xffffff,
       normalMap: nrm,
-      normalScale: new THREE.Vector2(0.55, 0.55),
-      roughness: 0.5,
+      normalScale: new THREE.Vector2(0.35, 0.35),
+      roughness: 0.42,
       metalness: 0.0,
-      emissive: new THREE.Color(color.hex),
-      emissiveIntensity: 0.06,
     });
     this.texCache.set(key, mat);
     return mat;
@@ -491,9 +502,9 @@ export class Scene3D {
           r = 8 + 14 * k; g = 8 + 10 * k; b = 10 + 12 * k;
         } else if (rad > 0.86) {
           const k = Math.min(1, (rad - 0.86) / 0.14);
-          r = lit[0] + (255 - lit[0]) * k * 0.75;
-          g = lit[1] + (255 - lit[1]) * k * 0.75;
-          b = lit[2] + (255 - lit[2]) * k * 0.75;
+          r = col[0] + (lit[0] - col[0]) * (0.4 + 0.6 * k);
+          g = col[1] + (lit[1] - col[1]) * (0.4 + 0.6 * k);
+          b = col[2] + (lit[2] - col[2]) * (0.4 + 0.6 * k);
         } else {
           const k = (rad - 0.48) / 0.38;
           r = col[0] + (lit[0] - col[0]) * k * 0.55;
@@ -1110,7 +1121,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 0.42 * (2 * this.ropeOuter);
+          const period = 0.7 * (2 * this.ropeOuter);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
