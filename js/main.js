@@ -3,7 +3,7 @@ import { generateLevel, LEVEL_COUNT } from './levels.js';
 import { makeRopeState, initPoints, simulateRope, wrapPolyline, captureRest, wakeRope } from './rope.js';
 import { Scene3D } from './scene3d.js';
 import { Particles } from './particles2d.js';
-import { ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
+import { polylinesCross, ropeIsCrossed, ropeIsCrossedLogical, ropeIsCrossedVisible } from './crossing.js';
 
 const canvas = document.getElementById('game');
 const fxCanvas = document.getElementById('fx');
@@ -18,7 +18,7 @@ let levelIdx = 0;
 let level = null;
 let ropeStates = [];
 let pegs = [];
-let coins = 0;
+let coins = 10150;
 let timeLeft = 180;
 let running = false;
 let dragging = null;
@@ -42,8 +42,8 @@ let lastTouchedRopeId = null; // only touched / cascade-eligible ropes may clear
 const CASCADE_GAP = 0.4; // seconds after pop before next clear may start
 const CLEAR_SETTLE_NEED = 0.35; // wait after action before counting freeT
 
-const RETRACT_DUR = 0.2;
-const SNAP_DUR = 0.07; // 70 ms ease-in snap to floor/peg
+const RETRACT_DUR = 0.32;
+const SNAP_DUR = 0.12; // ~120 ms, matching the reference snap onto a peg
 const LIFT_DUR = 0.08; // magnetic pop lift
 const FOLLOW_BASE = 0.97; // ref: nearly 1:1 finger tracking
 const MAX_STRETCH = 1.85; // hard rubber stop vs elastic rest
@@ -77,24 +77,68 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
+function layShowcasePath(rs) {
+  const src = rs.path;
+  if (!src || src.length < 2 || !rs.points) return;
+  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H }));
+  const seg = [];
+  let total = 0;
+  for (let i = 1; i < pix.length; i++) {
+    const d = Math.hypot(pix[i].x - pix[i - 1].x, pix[i].y - pix[i - 1].y);
+    seg.push(d);
+    total += d;
+  }
+  const n = rs.points.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let dist = (total * i) / (n - 1);
+    let k = 0;
+    while (k < seg.length - 1 && dist > seg[k]) { dist -= seg[k]; k++; }
+    const t = seg[k] > 1e-4 ? dist / seg[k] : 0;
+    const x = pix[k].x + (pix[k + 1].x - pix[k].x) * t;
+    const y = pix[k].y + (pix[k + 1].y - pix[k].y) * t;
+    out.push({ x, y });
+  }
+  for (let i = 0; i < n; i++) {
+    rs.points[i].x = out[i].x; rs.points[i].y = out[i].y;
+    rs.points[i].ox = out[i].x; rs.points[i].oy = out[i].y;
+  }
+  rs.elasticRest = Math.max(80, total * 0.98);
+  rs._guide = out.map(p => ({ x: p.x, y: p.y }));
+  rs._traced = true;
+  rs._prevPts = out.map(p => ({ x: p.x, y: p.y }));
+  rs._framePts = out.map(p => ({ x: p.x, y: p.y }));
+  rs._fitDone = true;
+  rs.stretch = 1;
+}
+
 function layoutPegs() {
   if (!level) return;
   // Compact board so packed peg cluster reads ~0.60 W on screen
   const isLandscape = W > H;
   // Board sized so packed cluster (~0.86 of board) ≈ 0.60 W on screen
-  boardW = isLandscape ? Math.min(W * 0.74, H * 1.05) : Math.min(W * 0.74, H * 0.60);
-  boardH = boardW * 0.82;
-  if (isLandscape) boardH = Math.min(boardH, H * 0.75);
-  else boardH = Math.min(boardH, H * 0.56);
-  boardOX = (W - boardW) / 2;
-  const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
-  // Slightly below middle of free area under HUD
-  boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.55);
+  if (level.showcase && !isLandscape) {
+    // Full frame so traced 0..1 coordinates land on the reference pixels.
+    boardW = W;
+    boardH = H;
+    boardOX = 0;
+    boardOY = 0;
+  } else {
+    boardW = isLandscape ? Math.min(W * 0.74, H * 1.05) : Math.min(W * 0.74, H * 0.60);
+    boardH = boardW * 0.82;
+    if (isLandscape) boardH = Math.min(boardH, H * 0.75);
+    else boardH = Math.min(boardH, H * 0.56);
+    boardOX = (W - boardW) / 2;
+    const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
+    boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
+  }
+  const pixelLock = !!(level.showcase && !(W > H));
   for (const p of pegs) {
     p.x = boardOX + p.nx * boardW;
     p.y = boardOY + p.ny * boardH;
+    p.pixelLock = pixelLock;
   }
-  scene.setBoardLayout(boardOX, boardOY, boardW, boardH);
+  scene.setBoardLayout(boardOX, boardOY, boardW, boardH, !!(level && level.showcase && !(W > H)));
 }
 
 function loadLevel(idx) {
@@ -112,12 +156,23 @@ function loadLevel(idx) {
     rs.retracting = false;
   }
   syncRopeEndsFromStacks();
+  if (level.showcase) {
+    for (const rs of ropeStates) {
+      if (!rs.path || rs.path.length < 2) continue;
+      const a = rs.path[0], b = rs.path[rs.path.length - 1];
+      rs._ends = [
+        { pegId: -1, x: a[0] * W, y: a[1] * H },
+        { pegId: -1, x: b[0] * W, y: b[1] * H },
+      ];
+    }
+  }
   const clear = PEG_R + ROPE_W * 0.7 + 6;
   for (const rs of ropeStates) {
     const ends = endPositions(rs.id);
     if (ends) initPoints(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, clear);
+    if (level.showcase && rs.path && rs.points) layShowcasePath(rs);
   }
-  for (let s = 0; s < 24; s++) {
+  for (let s = 0; s < (level.showcase ? 0 : 24); s++) {
     for (const rs of ropeStates) {
       const ends = endPositions(rs.id);
       if (!ends || !rs.points) continue;
@@ -141,8 +196,15 @@ function loadLevel(idx) {
     rs._stillFrames = 0;
     rs._stillTime = 0;
     rs._awakeTime = 0;
+    if (level.showcase) {
+      rs._sleeping = true;
+      rs._stillTime = 1;
+      rs._stillFrames = 16;
+      rs.wobble = 0;
+    }
   }
-  document.getElementById('hud-level').textContent = String(idx + 1);
+  document.getElementById('hud-level').textContent = String(level.displayLevel || (idx + 1));
+  document.getElementById('coin-val').textContent = formatCoins(coins);
   document.getElementById('win-overlay').classList.add('hidden');
   document.getElementById('fail-overlay').classList.add('hidden');
   const diff = document.getElementById('pill-diff');
@@ -155,7 +217,7 @@ function loadLevel(idx) {
     dIcon.textContent = '😼'; dText.textContent = 'MED';
     diff.style.background = 'linear-gradient(180deg,#FCD34D,#D97706 55%,#B45309)';
   } else {
-    dIcon.textContent = '😈'; dText.textContent = 'HARD';
+    dText.textContent = 'HARD';
     diff.style.background = 'linear-gradient(180deg,#C084FC,#7C3AED 55%,#6D28D9)';
   }
   updateTimerHud();
@@ -695,16 +757,21 @@ function evaluateFrees() {
 }
 
 function startClear(rs) {
+  const leaving = (rs.points || []).map(p => ({ x: p.x, y: p.y }));
   rs.clearing = true;
   rs.clearT = 0;
   rs.retracting = true;
   rs._clearStartedAt = performance.now();
   // Stagger: next rope may clear only after this pop finishes + CASCADE_GAP
   nextClearAllowedAt = performance.now() + (RETRACT_DUR + CASCADE_GAP) * 1000;
-  // Legit cascade: other ropes that are now visually free (this was their only crosser)
+  // Only a rope this one was actually crossing can cascade, and only if
+  // nothing else still crosses it. Untouched ropes are not cleared.
   for (let i = 0; i < ropeStates.length; i++) {
     const o = ropeStates[i];
     if (o.clearing || o.id === rs.id) continue;
+    const ptsO = getSettledPolyline(o);
+    if (!ptsO || leaving.length < 2) continue;
+    if (!polylinesCross(ptsO, leaving, getEndPegs(o), getEndPegs(rs), PEG_R * 0.95)) continue;
     if (!ropeVisuallyCrossed(i)) o._cascadeEligible = true;
   }
   // Remove both caps from pegs

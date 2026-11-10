@@ -4,6 +4,7 @@
  * Clear rule is "no crossings" (checked at runtime) — start must have 0 free ropes.
  */
 import { polylinesCross } from './crossing.js';
+import { showcaseLevel } from './level201.js';
 
 export const COLORS = [
   { name: 'red', hex: '#E8302A', dark: '#961F1B', light: '#E9403B' },
@@ -144,6 +145,7 @@ function anyFreeRope(pegs, ropes) {
 }
 
 export function generateLevel(levelIndex) {
+  if (levelIndex === 0) return showcaseLevel();
   const rng = mulberry32(3000 + levelIndex * 97);
   // 10+ levels, up to ~10 ropes on HARD
   // 12 levels: 3 → ~10 ropes; always leave empty pegs for moves

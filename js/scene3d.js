@@ -7,7 +7,7 @@ import { makeBraidCanvas, makeBraidNormalCanvas } from './braidTexture.js';
 import { displayPoints } from './rope.js';
 
 const TUBE_SEGMENTS = 96;
-const TUBE_SEGS_FIXED = 128;
+const TUBE_SEGS_FIXED = 220;
 const RADIAL = 36;
 
 /**
@@ -19,26 +19,54 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
   const tubular = tubularSegments;
   const verts = [];
   const normals = [];
+  const colors = [];
   const uvs = [];
   const indices = [];
   const P = new THREE.Vector3();
   const N = new THREE.Vector3();
   const B = new THREE.Vector3();
-  for (let i = 0; i <= tubular; i++) {
+    // Tight 3-ply: crests every 0.4 rope-widths along the rope, displaced in the surface.
+    // One crest every ~1.1 rope widths, so the three plies read as diagonals.
+    const plyPitch = Math.max(radius * 2 * 1.1, 1e-4);
+    const amp = 0;
+    const tilt = 0.35;
+    const sAt = new Array(tubular + 1);
+    sAt[0] = 0;
+    for (let i = 1; i <= tubular; i++) {
+      sAt[i] = sAt[i - 1] + frames.points[i].distanceTo(frames.points[i - 1]);
+    }
+    for (let i = 0; i <= tubular; i++) {
     P.copy(frames.points[i]);
     N.copy(frames.normals[i]);
     B.copy(frames.binormals[i]);
+    const T = frames.tangents[i];
     for (let j = 0; j <= radial; j++) {
       const v = j / radial;
       const ang = v * Math.PI * 2;
       const sin = Math.sin(ang);
       const cos = -Math.cos(ang);
-      // normal = cos*N + sin*B
-      const nx = cos * N.x + sin * B.x;
-      const ny = cos * N.y + sin * B.y;
-      const nz = cos * N.z + sin * B.z;
-      normals.push(nx, ny, nz);
-      verts.push(P.x + radius * nx, P.y + radius * ny, P.z + radius * nz);
+      const rx = cos * N.x + sin * B.x;
+      const ry = cos * N.y + sin * B.y;
+      const rz = cos * N.z + sin * B.z;
+      const phase = 3 * ang - (sAt[i] / plyPitch) * Math.PI * 2;
+      const bump = Math.cos(phase);
+      const r = radius * (1 + amp * bump);
+      const dBump = -Math.sin(phase);
+      const drdAng = radius * amp * dBump * 3 * tilt;
+      const drdS = radius * amp * dBump * (-2 * Math.PI / plyPitch) * tilt;
+      const ax = Math.sin(ang) * N.x + Math.cos(ang) * B.x;
+      const ay = Math.sin(ang) * N.y + Math.cos(ang) * B.y;
+      const az = Math.sin(ang) * N.z + Math.cos(ang) * B.z;
+      let nx = rx * r - drdAng * ax - drdS * T.x;
+      let ny = ry * r - drdAng * ay - drdS * T.y;
+      let nz = rz * r - drdAng * az - drdS * T.z;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      normals.push(nx / len, ny / len, nz / len);
+      // Soft top-light so the cylinder reads as round. The ply itself stays in the texture.
+      const up = ny / len * 0.5 + 0.5;
+      const shade = 0.84 + 0.16 * up;
+      colors.push(shade, shade, shade);
+      verts.push(P.x + r * rx, P.y + r * ry, P.z + r * rz);
       uvs.push(i / tubular, v);
     }
   }
@@ -56,6 +84,7 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
   geom.setIndex(indices);
   geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   // stash for integrity/debug
   geom.parameters = { path: curve, tubularSegments, radius, radialSegments, closed: false };
@@ -148,13 +177,12 @@ export class Scene3D {
       bgC.width = 512; bgC.height = 512;
       const bx = bgC.getContext('2d');
       // White glow only behind cluster; blue-grey floor elsewhere (#DDE3EA mid, #B9C3CF edges)
-      const bg = bx.createRadialGradient(256, 270, 20, 256, 270, 230);
+      const bg = bx.createRadialGradient(256, 248, 8, 256, 250, 280);
       bg.addColorStop(0, '#FFFFFF');
-      bg.addColorStop(0.10, '#F7FAFC');
-      bg.addColorStop(0.28, '#DDE3EA');
-      bg.addColorStop(0.55, '#C5CDD8');
-      bg.addColorStop(0.78, '#B9C3CF');
-      bg.addColorStop(1, '#A8B2BE');
+      bg.addColorStop(0.08, '#F4F8FC');
+      bg.addColorStop(0.22, '#D5DEE8');
+      bg.addColorStop(0.5, '#B7C2CE');
+      bg.addColorStop(1, '#A9AEB7');
       bx.fillStyle = bg;
       bx.fillRect(0, 0, 512, 512);
       const bgTex = new THREE.CanvasTexture(bgC);
@@ -162,7 +190,7 @@ export class Scene3D {
       this.scene.background = bgTex;
     }
 
-    this._camTilt = (16 * Math.PI) / 180;
+    this._camTilt = (15 * Math.PI) / 180;
     this._camDist = 28;
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 120);
 
@@ -170,13 +198,14 @@ export class Scene3D {
     const floorCanvas = document.createElement('canvas');
     floorCanvas.width = 512; floorCanvas.height = 512;
     const fctx = floorCanvas.getContext('2d');
-    const fg = fctx.createRadialGradient(256, 256, 18, 256, 256, 250);
+    const fg = fctx.createRadialGradient(256, 248, 6, 256, 256, 270);
     fg.addColorStop(0, '#FFFFFF');
-    fg.addColorStop(0.12, '#F5F8FB');
-    fg.addColorStop(0.32, '#DDE3EA');
-    fg.addColorStop(0.58, '#C5CDD8');
-    fg.addColorStop(0.82, '#B9C3CF');
-    fg.addColorStop(1, '#A8B2BE');
+    fg.addColorStop(0.05, '#F5FAFF');
+    fg.addColorStop(0.12, '#E7EEF6');
+    fg.addColorStop(0.22, '#D0DAE4');
+    fg.addColorStop(0.4, '#B7C2CC');
+    fg.addColorStop(0.7, '#A9B3BD');
+    fg.addColorStop(1, '#A4ADB6');
     fctx.fillStyle = fg;
     fctx.fillRect(0, 0, 512, 512);
     const floorTex = new THREE.CanvasTexture(floorCanvas);
@@ -192,39 +221,36 @@ export class Scene3D {
 
     this.shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 22),
-      new THREE.ShadowMaterial({ opacity: 0.30 })
+      new THREE.ShadowMaterial({ opacity: 0.22 })
     );
     this.shadowFloor.rotation.x = -Math.PI / 2;
     this.shadowFloor.position.y = 0.008;
     this.shadowFloor.receiveShadow = true;
     this.scene.add(this.shadowFloor);
 
-    // Brighter hemi/ambient so MeshStandard braid stays saturated (no grey wash)
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8a9aa8, 0.38);
+    // Ropes are unlit. These lights are for the caps and pegs, which need a
+    // real upper-left key or the rims and cylinders stay flat.
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8aa0b4, 0.28);
     this.scene.add(this.hemi);
-    // High soft key → tight darker contact shadows under ropes
-    this.sun = new THREE.DirectionalLight(0xffffff, 1.15);
-    this.sun.position.set(3.5, 22, -2.5); // more side angle for tube form
+    this.sun = new THREE.DirectionalLight(0xffffff, 0.42);
+    this.sun.position.set(0.4, 24, 7);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 45;
+    this.sun.shadow.camera.far = 50;
     this.sun.shadow.camera.left = -8;
     this.sun.shadow.camera.right = 8;
     this.sun.shadow.camera.top = 8;
     this.sun.shadow.camera.bottom = -8;
-    this.sun.shadow.bias = -0.00025;
-    this.sun.shadow.normalBias = 0.02;
-    this.sun.shadow.radius = 1.15;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.radius = 10;
     this.scene.add(this.sun);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.18));
-    const fill = new THREE.DirectionalLight(0xe8f4ff, 0.32);
-    fill.position.set(-5, 12, 5);
-    this.scene.add(fill);
-    // Low-angle rim so tube limbs read round from top-down
-    const rim = new THREE.DirectionalLight(0xffffff, 0.45);
-    rim.position.set(8, 4, 3);
-    this.scene.add(rim);
+    // Screen-left and above. Screen-left is -X; the top of the frame is -Z.
+    this.key = new THREE.DirectionalLight(0xfffaf4, 1.35);
+    this.key.position.set(-14, 18, -6);
+    this.scene.add(this.key);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.16));
 
     this.VIEW_W = 10;
     this._applyTargetProportions();
@@ -251,15 +277,21 @@ export class Scene3D {
   _applyTargetProportions() {
     const V = this.VIEW_W;
     // Peg diameter ~0.055W; rope diameter 0.9× peg ≈ 0.05W
-    this.pegR = (0.055 * V) / 2;
-    // Rope diameter ≈ 1.05× peg diameter → chunky
-    this.ropeR = this.pegR * 1.10;
-    // Cap slightly wider than peg — thick saturated disc
-    this.capR = this.pegR * 1.25;
-    this.capH = this.pegR * 0.42;
-    // Visible peg height ≈ 1.2× peg diameter
-    // World height tuned so screen pegHvis ≈ 1.2× pegD under ~16° ortho tilt
-    this.pegH = this.pegR * 2 * 0.38 * 3.6; // screen pegHvis ≈ 0.38× pegD — short glossy like reference
+    // Peg posts are the tall landmarks; ropes are a little thinner than a peg.
+    // Short stubs. Ropes are about twice as thick as a peg, like the reference.
+    // Peg diameter matches the reference stubs. Rope width is about 0.9× that.
+    // Screen target on an 894-wide frame: peg top ~31px, rope ~31px (measured, then scaled).
+    // Tuned so an 894px-wide frame measures: peg top ~32px, rope ~42px (reference inscribed widths).
+    // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
+    // Reference rope/cap ends read about 28% thicker than the 44px pass.
+    // Peg footprint stays put; only the drawn rope and cap grow.
+    this.ropeOuter = 56 / (2 * (894 / 10));
+    this.ropeR = this.ropeOuter / 1.02;
+    this.pegR = 33 / (2 * (894 / 10));
+    this.capR = this.ropeOuter * 1.08;
+    this.capH = 0.22 * (2 * this.ropeR);
+    const pegRopeR = 44 / (2 * (894 / 10)) / 1.02;
+    this.pegH = pegRopeR * 6.2;
   }
 
   resize(cssW, cssH, dpr) {
@@ -277,22 +309,25 @@ export class Scene3D {
     this._placeCamera();
   }
 
-  setBoardLayout(ox, oy, boardW, boardH) {
+  setBoardLayout(ox, oy, boardW, boardH, identityFloor = false) {
     this.ox = ox; this.oy = oy; this.boardW = boardW; this.boardH = boardH;
     const frac = boardW / Math.max(1, this.W);
     this.worldSpan = this.VIEW_W * frac;
+    // Identity floor: a board pixel projects back to that screen pixel at y=0.
+    const aspect = this.H / Math.max(1, this.W);
+    this.zScale = identityFloor ? aspect / Math.cos(this._camTilt) : 0.95;
   }
 
   toWorld(px, py) {
     const nx = (px - this.ox) / this.boardW - 0.5;
     const nz = (py - this.oy) / this.boardH - 0.5;
-    const zScale = 0.95; // tighter cluster like reference
+    const zScale = this.zScale || 0.95;
     return { x: nx * this.worldSpan, z: nz * this.worldSpan * zScale };
   }
 
   /** Inverse of toWorld — board/CSS coords from world XZ. */
   fromWorld(wx, wz) {
-    const zScale = 0.95;
+    const zScale = this.zScale || 0.95;
     const nx = wx / Math.max(1e-6, this.worldSpan);
     const nz = wz / Math.max(1e-6, this.worldSpan * zScale);
     return {
@@ -305,19 +340,21 @@ export class Scene3D {
    * Raycast CSS-pixel pointer through the ortho camera onto a world Y plane,
    * return board/CSS coords. Accounts for tilt + aspect (1:1 finger tracking).
    */
-  screenToBoard(sx, sy, planeY = 0) {
+  screenToWorld(sx, sy, planeY = 0) {
+    this.camera.updateMatrixWorld(true);
     const ndcX = (sx / Math.max(1, this.W)) * 2 - 1;
     const ndcY = -(sy / Math.max(1, this.H)) * 2 + 1;
     const near = new THREE.Vector3(ndcX, ndcY, -1).unproject(this.camera);
     const far = new THREE.Vector3(ndcX, ndcY, 1).unproject(this.camera);
-    const dir = far.sub(near);
-    if (Math.abs(dir.y) < 1e-8) {
-      return this.fromWorld(near.x, near.z);
-    }
+    const dir = far.clone().sub(near);
+    if (Math.abs(dir.y) < 1e-8) return new THREE.Vector3(near.x, planeY, near.z);
     const t = (planeY - near.y) / dir.y;
-    const hx = near.x + dir.x * t;
-    const hz = near.z + dir.z * t;
-    return this.fromWorld(hx, hz);
+    return new THREE.Vector3(near.x + dir.x * t, planeY, near.z + dir.z * t);
+  }
+
+  screenToBoard(sx, sy, planeY = 0) {
+    const w = this.screenToWorld(sx, sy, planeY);
+    return this.fromWorld(w.x, w.z);
   }
 
   /** Project a board-space point at a given world Y (cap center). */
@@ -327,49 +364,57 @@ export class Scene3D {
   }
 
   floorCapY() {
-    // Cap disc sits just above the floor rope height
-    return Math.max(this.ropeR * 0.35, this.capH * 0.55);
+    return this.ropeR * 1.9;
+  }
+
+  /** End grommet, raised onto the tube top but shifted so it stays on the end in screen space. */
+  capOnEnd(attach) {
+    const dy = this.ropeOuter * 0.92;
+    const shift = dy * Math.tan(this._camTilt);
+    return { x: attach.x, y: attach.y + dy, z: attach.z + shift };
   }
 
   _placeCamera() {
     const d = this._camDist;
     const t = this._camTilt;
     this.camera.position.set(0, d * Math.cos(t), d * Math.sin(t));
-    this.camera.lookAt(0, 0.2, 0);
+    this.camera.lookAt(0, 0, 0);
     this.camera.up.set(0, 1, 0);
   }
 
   _pegMat() {
     if (this._pegMatCached) return this._pegMatCached;
-    const sideC = document.createElement('canvas');
-    sideC.width = 128; sideC.height = 128;
-    const sctx = sideC.getContext('2d');
-    const sg = sctx.createLinearGradient(0, 0, 0, 128);
-    sg.addColorStop(0, '#D4F0FA');
-    sg.addColorStop(0.35, '#B0E4F6');
-    sg.addColorStop(0.7, '#96D8F2');
-    sg.addColorStop(1, '#82CBEC');
-    sctx.fillStyle = sg;
-    sctx.fillRect(0, 0, 128, 128);
-    // Strong specular streak (glossy cylinder look under NoToneMapping)
-    const hg = sctx.createLinearGradient(0, 0, 128, 0);
-    hg.addColorStop(0.0, 'rgba(255,255,255,0.0)');
-    hg.addColorStop(0.18, 'rgba(255,255,255,0.15)');
-    hg.addColorStop(0.32, 'rgba(255,255,255,0.72)');
-    hg.addColorStop(0.40, 'rgba(255,255,255,0.35)');
-    hg.addColorStop(0.55, 'rgba(255,255,255,0.05)');
-    hg.addColorStop(0.85, 'rgba(30,80,110,0.10)');
-    hg.addColorStop(1.0, 'rgba(20,60,90,0.18)');
-    sctx.fillStyle = hg;
-    sctx.fillRect(0, 0, 128, 128);
-    const sideTex = new THREE.CanvasTexture(sideC);
-    sideTex.colorSpace = THREE.SRGBColorSpace;
-    this._pegMatCached = new THREE.MeshStandardMaterial({
-      map: sideTex, color: 0xffffff,
-      roughness: 0.22, metalness: 0.08,
-      emissive: new THREE.Color(0x7EC8E8), emissiveIntensity: 0.12,
-    });
+    // Painted shade. A lit standard cylinder was washing out to one cyan-grey
+    // under the fill light, and the UV streak sat on the wrong side.
+    this._pegMatCached = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
     return this._pegMatCached;
+  }
+
+  /** Left side and a vertical streak bright, right side and the foot dark. */
+  _shadePegBody(geom) {
+    const pos = geom.attributes.position;
+    const nrm = geom.attributes.normal;
+    const h = geom.parameters.height || 1;
+    const lit = new THREE.Color(0xE7F5FC);
+    const mid = new THREE.Color(0x7EB4CC);
+    const sh = new THREE.Color(0x3A5C70);
+    const cols = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const nx = nrm.getX(i);
+      const nz = nrm.getZ(i);
+      const y = pos.getY(i);
+      const foot = (y / (h * 0.5) + 1) * 0.5; // 0 at the foot, 1 at the top
+      const side = (-nx) * 0.5 + 0.5; // 1 on screen-left
+      // Highlight just left of center, darker at both silhouettes, darker still on the right.
+      const band = Math.exp(-((side - 0.64) ** 2) / (2 * 0.11 * 0.11));
+      const c = sh.clone().lerp(mid, Math.min(1, side * 0.85 + 0.15));
+      c.lerp(lit, band * Math.max(0, nz));
+      const k = 0.34 + 0.66 * foot * foot;
+      cols[i * 3] = Math.min(1, c.r * k);
+      cols[i * 3 + 1] = Math.min(1, c.g * k);
+      cols[i * 3 + 2] = Math.min(1, c.b * k);
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   }
 
   _pegTopMat() {
@@ -377,20 +422,17 @@ export class Scene3D {
     const topC = document.createElement('canvas');
     topC.width = 128; topC.height = 128;
     const tctx = topC.getContext('2d');
-    const rg = tctx.createRadialGradient(48, 44, 4, 64, 64, 64);
-    rg.addColorStop(0, '#FFFFFF');
-    rg.addColorStop(0.25, '#F2FBFE');
-    rg.addColorStop(0.55, '#D8F0FA');
-    rg.addColorStop(0.85, '#B5E3F5');
-    rg.addColorStop(1, '#9DD6EE');
+    // Flat cap, lighter on screen-left. A radial hotspot read as a ball.
+    const rg = tctx.createLinearGradient(0, 0, 128, 0);
+    rg.addColorStop(0, '#F4FBFF');
+    rg.addColorStop(0.45, '#D5EEF8');
+    rg.addColorStop(1, '#9FCDDF');
     tctx.fillStyle = rg;
     tctx.fillRect(0, 0, 128, 128);
     const topTex = new THREE.CanvasTexture(topC);
     topTex.colorSpace = THREE.SRGBColorSpace;
-    this._pegTopMatCached = new THREE.MeshStandardMaterial({
+    this._pegTopMatCached = new THREE.MeshBasicMaterial({
       map: topTex, color: 0xffffff,
-      roughness: 0.15, metalness: 0.08,
-      emissive: new THREE.Color(0xD0EAF5), emissiveIntensity: 0.18,
     });
     return this._pegTopMatCached;
   }
@@ -407,87 +449,86 @@ export class Scene3D {
   _ropeMat(color) {
     const key = color.hex;
     if (this.texCache.has(key)) return this.texCache.get(key);
-    const aniso = Math.min(16, this.renderer.capabilities.getMaxAnisotropy?.() || 8);
-    const canvas = makeBraidCanvas(color.hex, color.dark, color.light, 512);
+    // Solid rope colour. The 3-ply shape is in the displaced vertices, so the
+    // highlight and the groove come from the light, not from a painted stripe.
+    const canvas = makeBraidCanvas(color.hex, color.hex, color.light, 512);
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(4, 1);
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.generateMipmaps = false;
-    tex.minFilter = THREE.LinearFilter;
-    tex.magFilter = THREE.LinearFilter;
-    tex.anisotropy = aniso;
-    tex.needsUpdate = true;
-    if (!this._braidNormal) {
-      const nc = makeBraidNormalCanvas(512);
-      this._braidNormal = new THREE.CanvasTexture(nc);
-      this._braidNormal.wrapS = THREE.RepeatWrapping;
-      this._braidNormal.wrapT = THREE.RepeatWrapping;
-      this._braidNormal.generateMipmaps = false;
-      this._braidNormal.minFilter = THREE.LinearFilter;
-      this._braidNormal.magFilter = THREE.LinearFilter;
-      this._braidNormal.anisotropy = aniso;
-      this._braidNormal.needsUpdate = true;
-    }
-    const nrm = this._braidNormal.clone();
-    nrm.wrapS = THREE.RepeatWrapping;
-    nrm.wrapT = THREE.RepeatWrapping;
-    nrm.generateMipmaps = false;
-    nrm.minFilter = THREE.LinearFilter;
-    nrm.magFilter = THREE.LinearFilter;
-    nrm.anisotropy = aniso;
-    nrm.repeat.set(4, 1);
-    const baseCol = new THREE.Color(color.hex);
-    // Helix3 material: roughness 0.55, normalScale 1.15 — round tube shading
-    const mat = new THREE.MeshStandardMaterial({
+    tex.repeat.set(6, 1);
+    // Unlit so the sampled colour is the texture, not a lighting crush.
+    // Vertex colour only adds the soft cylindrical shade (0.90–1.0).
+    const mat = new THREE.MeshBasicMaterial({
       map: tex,
-      normalMap: nrm,
-      normalScale: new THREE.Vector2(0.62, 0.62),
       color: 0xffffff,
-      roughness: 0.40,
-      metalness: 0.0,
-      emissive: baseCol.clone().multiplyScalar(0.08),
-      emissiveIntensity: 1,
+      vertexColors: true,
     });
     this.texCache.set(key, mat);
     return mat;
   }
 
-  _capMat(color) {
-    const key = 'cap|' + color.hex;
-    if (this.texCache.has(key)) return this.texCache.get(key);
+  _vertexMat() {
+    if (this._vertexMatCached) return this._vertexMatCached;
+    this._vertexMatCached = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true });
+    return this._vertexMatCached;
+  }
+
+  _capHoleMat() {
+    if (this._capHoleCached) return this._capHoleCached;
     const c = document.createElement('canvas');
-    c.width = 128; c.height = 128;
-    const ctx = c.getContext('2d');
-    const cx = 64, cy = 64;
-    ctx.beginPath(); ctx.arc(cx, cy, 62, 0, Math.PI * 2);
-    ctx.fillStyle = color.hex; ctx.fill();
-    const rim = ctx.createRadialGradient(cx, cy, 40, cx, cy, 62);
-    rim.addColorStop(0, 'rgba(0,0,0,0)');
-    rim.addColorStop(0.75, 'rgba(0,0,0,0.04)');
-    rim.addColorStop(1, 'rgba(0,0,0,0.2)');
-    ctx.fillStyle = rim; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 30, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 23, 0, Math.PI * 2);
-    const dark = ctx.createRadialGradient(cx - 3, cy - 4, 1, cx, cy, 23);
-    dark.addColorStop(0, color.dark);
-    dark.addColorStop(0.65, color.dark);
-    dark.addColorStop(1, '#120808');
-    ctx.fillStyle = dark; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 23, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 2.5; ctx.stroke();
+    c.width = 8; c.height = 64;
+    const g = c.getContext('2d');
+    const grd = g.createLinearGradient(0, 0, 0, 64);
+    // Top of the wall, just under the lip, is the darkest. The floor stays dark.
+    grd.addColorStop(0, '#1c2128');
+    grd.addColorStop(0.35, '#101318');
+    grd.addColorStop(1, '#07080a');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 8, 64);
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const base = new THREE.Color(color.hex);
-    const mat = new THREE.MeshStandardMaterial({
-      map: tex, color: 0xffffff,
-      roughness: 0.45, metalness: 0.0,
-      emissive: base.clone().multiplyScalar(0.1), emissiveIntensity: 1,
+    this._capHoleCached = new THREE.MeshBasicMaterial({
+      map: tex, color: 0xffffff, side: THREE.BackSide,
     });
-    this.texCache.set(key, mat);
-    return mat;
+    return this._capHoleCached;
+  }
+
+  /**
+   * TorusGeometry lies in XY. After rotation.x = +90°, local -Y is screen-up
+   * and local -X is screen-left, which is where the reference rim catches light.
+   * The inner half of the bead is the dark wall of the hole.
+   */
+  _paintRim(geom, color) {
+    const major = geom.parameters.radius;
+    const minor = geom.parameters.tube;
+    const pos = geom.attributes.position;
+    const base = new THREE.Color(color.hex);
+    const lit = new THREE.Color(color.light);
+    const dark = new THREE.Color(color.dark);
+    const white = new THREE.Color(0xfffaf6);
+    const cols = new Float32Array(pos.count * 3);
+    const ulAng = Math.atan2(-1, -1);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const radial = Math.hypot(x, y);
+      let ang = Math.atan2(y, x) - ulAng;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      const z = pos.getZ(i);
+      const facingUp = Math.max(0, Math.min(1, -z / minor));
+      const highlight = Math.exp(-(ang * ang) / (2 * 0.62 * 0.62));
+      const inner = Math.max(0, Math.min(1, (major - radial) / minor));
+      const c = base.clone().lerp(lit, 0.4);
+      c.lerp(dark, inner * 0.95);
+      c.lerp(white, Math.min(1, highlight * (0.35 + 0.65 * facingUp) * (1 - inner * 0.35)));
+      const shade = Math.exp(-((ang - Math.PI) ** 2) / (2 * 0.7 * 0.7));
+      c.lerp(dark, shade * 0.7);
+      cols[i * 3] = c.r;
+      cols[i * 3 + 1] = c.g;
+      cols[i * 3 + 2] = c.b;
+    }
+    geom.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   }
 
   syncPegs(pegList) {
@@ -498,18 +539,17 @@ export class Scene3D {
     }
     while (this.pegs.length < pegList.length) {
       const group = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 0.98, this.pegR * 1.06, this.pegH, 48),
-        this._pegMat()
-      );
+      const bodyGeom = new THREE.CylinderGeometry(this.pegR * 0.96, this.pegR * 1.02, this.pegH, 40);
+      this._shadePegBody(bodyGeom);
+      const body = new THREE.Mesh(bodyGeom, this._pegMat());
       body.castShadow = true;
       body.receiveShadow = true;
       body.position.y = this.pegH * 0.5;
       const top = new THREE.Mesh(
-        new THREE.CylinderGeometry(this.pegR * 1.01, this.pegR * 1.01, this.pegH * 0.05, 48),
+        new THREE.CylinderGeometry(this.pegR * 0.9, this.pegR * 0.96, this.pegH * 0.018, 32),
         this._pegTopMat()
       );
-      top.position.y = this.pegH - this.pegH * 0.02;
+      top.position.y = this.pegH - this.pegH * 0.008;
       top.castShadow = true;
       const rim = new THREE.Mesh(
         new THREE.TorusGeometry(this.pegR * 0.97, this.pegR * 0.04, 10, 48),
@@ -518,6 +558,12 @@ export class Scene3D {
       rim.rotation.x = Math.PI / 2;
       rim.position.y = this.pegH * 0.012;
       // Soft AO ring at base
+      const baseRing = new THREE.Mesh(
+        new THREE.TorusGeometry(this.pegR * 1.05, this.pegR * 0.16, 10, 28),
+        new THREE.MeshBasicMaterial({ color: 0x3E5C6E })
+      );
+      baseRing.rotation.x = Math.PI / 2;
+      baseRing.position.y = this.pegH * 0.04;
       const ao = new THREE.Mesh(
         new THREE.CircleGeometry(this.pegR * 1.35, 32),
         this._pegAOMat()
@@ -525,19 +571,24 @@ export class Scene3D {
       ao.rotation.x = -Math.PI / 2;
       ao.position.y = 0.015;
       ao.renderOrder = 1;
-      body.renderOrder = 5;
-      top.renderOrder = 6;
-      rim.renderOrder = 6;
-      group.add(ao, body, top, rim);
+      body.renderOrder = 8;
+      top.renderOrder = 28;
+      rim.renderOrder = 28;
+      group.add(ao, baseRing, body, top, rim);
       group.userData.body = body;
       this.scene.add(group);
       this.pegs.push(group);
     }
     for (let i = 0; i < pegList.length; i++) {
-      const w = this.toWorld(pegList[i].x, pegList[i].y);
       const m = this.pegs[i];
       const dip = this._pegDip.get(pegList[i].id) || 0;
-      m.position.set(w.x, -dip, w.z);
+      if (pegList[i].pixelLock) {
+        const w = this.screenToWorld(pegList[i].x, pegList[i].y, this.pegH);
+        m.position.set(w.x, -dip, w.z);
+      } else {
+        const w = this.toWorld(pegList[i].x, pegList[i].y);
+        m.position.set(w.x, -dip, w.z);
+      }
       m.visible = true;
     }
   }
@@ -549,29 +600,82 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(this.capR, this.capR * 1.02, this.capH, 40),
-      this._capMat(color)
+    const R = this.capR;
+    // Dark opening is 45% of the outer diameter. The bead between that
+    // opening and the silhouette is the thick rim.
+    const holeR = R * 0.56;
+    const minor = (R - holeR) * 0.5;
+    const major = holeR + minor;
+    const vmat = this._vertexMat();
+
+    const shoulderGeom = new THREE.SphereGeometry(R, 36, 16, 0, Math.PI * 2, 0.58, 1.05);
+    const base = new THREE.Color(color.hex);
+    const lit = new THREE.Color(color.light);
+    const dark = new THREE.Color(color.dark);
+    const sp = shoulderGeom.attributes.position;
+    const sn = shoulderGeom.attributes.normal;
+    const sc = new Float32Array(sn.count * 3);
+    const white = new THREE.Color(0xfffaf6);
+    const ulAng = Math.atan2(-1, -1);
+    for (let i = 0; i < sn.count; i++) {
+      const x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i);
+      const xz = Math.hypot(x, z) / R;
+      let ang = Math.atan2(z, x) - ulAng;
+      ang = Math.atan2(Math.sin(ang), Math.cos(ang));
+      const ul = Math.exp(-(ang * ang) / (2 * 0.48 * 0.48));
+      const lr = Math.exp(-((ang - Math.PI) ** 2) / (2 * 0.62 * 0.62));
+      // A band just outside the hole is the glossy bevel. Inside that band
+      // is the dark wall; the silhouette gets a dark outline.
+      const ring = Math.exp(-((xz - 0.70) ** 2) / (2 * 0.07 * 0.07));
+      const inner = Math.max(0, Math.min(1, (0.60 - xz) / 0.07));
+      const outer = Math.max(0, Math.min(1, (xz - 0.90) / 0.07));
+      const c = base.clone().lerp(lit, 0.35 + ring * 0.4);
+      c.lerp(white, ul * ring * 0.98);
+      c.lerp(dark, lr * ring * 0.72 + inner * 0.88 + outer * 0.7);
+      sc[i * 3] = c.r; sc[i * 3 + 1] = c.g; sc[i * 3 + 2] = c.b;
+    }
+    shoulderGeom.setAttribute('color', new THREE.BufferAttribute(sc, 3));
+    const shoulder = new THREE.Mesh(shoulderGeom, vmat);
+    shoulder.scale.set(1, 0.66, 1);
+
+    const rimGeom = new THREE.TorusGeometry(major, minor * 0.92, 18, 56);
+    this._paintRim(rimGeom, color);
+    const rim = new THREE.Mesh(rimGeom, vmat);
+    rim.rotation.x = Math.PI / 2;
+    const mouthY = Math.cos(0.58) * 0.66 * R;
+    rim.position.y = mouthY;
+
+    const outline = new THREE.Mesh(
+      new THREE.TorusGeometry(R * 1.01, R * 0.032, 8, 40),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(color.dark) })
     );
-    body.castShadow = true;
-    body.receiveShadow = true;
-    body.position.y = this.capH * 0.5;
-    // Glossy top ring (annulus look via texture) + slight bevel rim
-    const top = new THREE.Mesh(
-      new THREE.CylinderGeometry(this.capR * 0.99, this.capR * 0.99, this.capH * 0.1, 40),
-      this._capMat(color)
+    outline.rotation.x = Math.PI / 2;
+    outline.position.y = R * 0.02;
+
+    // Shallow well: a wide dark floor with only a short inner wall, so the
+    // opening stays a round recess instead of a deep crescent.
+    const wellH = R * 0.22;
+    const well = new THREE.Mesh(
+      new THREE.CylinderGeometry(holeR * 0.98, holeR * 0.86, wellH, 32, 1, true),
+      this._capHoleMat()
     );
-    top.position.y = this.capH * 0.95;
-    top.castShadow = true;
-    const bevel = new THREE.Mesh(
-      new THREE.TorusGeometry(this.capR * 0.92, this.capR * 0.06, 8, 40),
-      this._capMat(color)
+    well.position.y = mouthY - wellH * 0.55;
+
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(holeR * 0.86, 28),
+      new THREE.MeshBasicMaterial({ color: 0x0c0e12 })
     );
-    bevel.rotation.x = Math.PI / 2;
-    bevel.position.y = this.capH * 0.92;
-    group.add(body, top, bevel);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = well.position.y - wellH * 0.5 + R * 0.01;
+
+    shoulder.renderOrder = 14;
+    outline.renderOrder = 15;
+    well.renderOrder = 16;
+    floor.renderOrder = 16;
+    rim.renderOrder = 17;
+    group.add(shoulder, outline, well, floor, rim);
     group.userData.colorHex = color.hex;
-    group.userData.body = body;
+    group.userData.body = rim;
     return group;
   }
 
@@ -605,8 +709,28 @@ export class Scene3D {
     return entry.endCaps;
   }
 
+  /** Screen-pixel centerline, raycast onto the rope plane so it projects back onto those pixels. */
+  _traceWorldPts(raw) {
+    const planeY = this.ropeR;
+    const dense = [];
+    const src = raw.filter(p => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (src.length < 2) return [];
+    for (let i = 0; i < src.length - 1; i++) {
+      const a = src[i], b = src[i + 1];
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      const n = Math.max(1, Math.round(d / 6));
+      for (let k = 0; k < n; k++) {
+        const t = k / n;
+        dense.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    }
+    dense.push(src[src.length - 1]);
+    return dense.map(p => this.screenToWorld(p.x, p.y, planeY));
+  }
+
   /** Clean control points for TubeGeometry. */
-  _smoothWorldPts(raw, ends, baseY, scale) {
+  _smoothWorldPts(raw, ends, baseY, scale, keepShape) {
+    if (keepShape) return this._traceWorldPts(raw, ends);
     const minDist = 0.05;
     const cleaned = [];
     let lwx = null, lwz = null;
@@ -643,10 +767,19 @@ export class Scene3D {
       pts = next;
     }
 
-    // Fixed control count. A length-dependent count made sparsify/fillet
-    // add and drop points, which popped the tube and the braid phase.
-    const targetN = 24;
-    pts = resample2D(pts, targetN);
+    // Fixed count, then a heavy smooth so verlet kinks become wide floor arcs.
+    pts = resample2D(pts, 20);
+    for (let pass = 0; pass < 3; pass++) {
+      const next = pts.map(p => ({ x: p.x, z: p.z }));
+      for (let i = 1; i < pts.length - 1; i++) {
+        next[i].x = pts[i].x * 0.42 + (pts[i - 1].x + pts[i + 1].x) * 0.29;
+        next[i].z = pts[i].z * 0.42 + (pts[i - 1].z + pts[i + 1].z) * 0.29;
+      }
+      next[0] = pts[0];
+      next[next.length - 1] = pts[pts.length - 1];
+      pts = next;
+    }
+    pts = resample2D(pts, 24);
     for (let i = 0; i < 2; i++) pts = chaikin(pts);
     // Re-pin ends after chaikin/resample (those filters can drift endpoints)
     pts[0] = { x: e0.x, z: e0.z };
@@ -656,9 +789,10 @@ export class Scene3D {
     // Attach near resting height (under the magnet disc) — no tall pipe rise.
     // Centerline must clear floor by ≥ ropeR so the full round tube is visible
     // (floorY≈ropeR*1.02 buried the lower half → flat "ribbon" look from above)
-    const floorY = this.ropeR * 1.28; // keep full round tube above floor (no flat-stick)
-    const attachYPeg = Math.max(this.ropeR * 1.5, this.pegH * 0.88);
-    const attachYFloor = Math.max(this.floorCapY() * 0.85, this.ropeR * 1.35);
+    // Ropes lie on the floor. Ends rise only enough to meet a flat ring.
+    const floorY = this.ropeR * 1.02;
+    const attachYPeg = Math.max(floorY, this.pegH * 0.55);
+    const attachYFloor = this.ropeR * 0.72;
     // Dragged/lifted caps sit high — rope must meet the underside of that cap (not floor)
     const attachOf = (ep) => {
       if (ep && ep.lifted) {
@@ -669,7 +803,7 @@ export class Scene3D {
     };
     const a0 = attachOf(ends[0]);
     const a1 = attachOf(ends[1]);
-    const dropDist = this.ropeR * 3.6; // ~1.8 rope diameters — natural cap→floor drape
+    const dropDist = this.ropeR * 1.6;
     // Insert explicit side-exit points so the tube exits horizontally under the cap
     if (pts.length >= 2) {
       const d0 = Math.hypot(pts[1].x - pts[0].x, pts[1].z - pts[0].z) || 1;
@@ -770,14 +904,15 @@ export class Scene3D {
         built.push(null);
         continue;
       }
-      const layer = Math.min(3, (rs.z || i) % 4);
+      const layer = rs.z != null ? rs.z : i;
       // Rest on floor; stacking only via crossing lifts (~1 rope thickness)
       const baseY = this.ropeR * 1.28;
-      const shown = displayPoints(rs);
+      const guided = rs._guide && !rs._dragging && !rs._playerTouched && !rs.clearing;
+      const shown = guided ? rs._guide : displayPoints(rs);
       const srcPts = (shown && shown.length >= 2) ? shown : rs._wrapPath;
       if (!srcPts || srcPts.length < 2) { built.push(null); continue; }
       const stretch = rs.stretch || 1;
-      const worldPts = this._smoothWorldPts(srcPts, ends, baseY, stretch);
+      const worldPts = this._smoothWorldPts(srcPts, ends, baseY, stretch, !!rs._traced && guided);
       built.push({ rs, ends, layer, baseY, worldPts, stretch });
     }
 
@@ -794,10 +929,9 @@ export class Scene3D {
           for (let j = 0; j < B.length - 1; j++) {
             const hit = segIntersectXZ(A[i], A[i + 1], B[j], B[j + 1]);
             if (!hit) continue;
-            const stack = (built[hi].layer - built[lo].layer) + 1;
-            // Soft stacked contact — upper rope rests on lower with gentle height
-            const liftAmt = 2 * this.ropeR * Math.max(1, stack) * 1.05;
-            const influence = this.ropeR * 5.0;
+            // Upper rope clears the lower one by about one rope thickness.
+            const liftAmt = this.ropeR * 2.05;
+            const influence = this.ropeR * 2.6;
             for (let k = 1; k < A.length - 1; k++) { // never lift endpoints off magnet caps
               const d = Math.hypot(A[k].x - hit.x, A[k].z - hit.z);
               if (d < influence) {
@@ -806,6 +940,22 @@ export class Scene3D {
                 lifts[hi][k] = Math.max(lifts[hi][k], liftAmt * w);
               }
             }
+          }
+        }
+      }
+    }
+
+    // Ropes climb the shoulder of a nearby peg so the crossing has a visible rise.
+    for (let i = 0; i < built.length; i++) {
+      if (!built[i] || !lifts[i]) continue;
+      const pts = built[i].worldPts;
+      for (const peg of this.pegs) {
+        for (let k = 1; k < pts.length - 1; k++) {
+          const d = Math.hypot(pts[k].x - peg.position.x, pts[k].z - peg.position.z);
+          const reach = this.ropeOuter + this.pegR * 1.4;
+          if (d < reach && d > this.pegR * 0.35) {
+            const t = 1 - (d - this.pegR * 0.35) / (reach - this.pegR * 0.35);
+            lifts[i][k] = Math.max(lifts[i][k], this.ropeR * 0.9 * t * t);
           }
         }
       }
@@ -867,11 +1017,9 @@ export class Scene3D {
       });
       // Laplacian-smooth Y so crossing lifts don't kink the tube into sawteeth
       if (pts.length > 4 && !(rs.clearing && rs.retracting)) {
-        for (let pass = 0; pass < 2; pass++) {
-          const ys = pts.map(p => p.y);
-          for (let k = 1; k < pts.length - 1; k++) {
-            pts[k].y = ys[k] * 0.5 + (ys[k - 1] + ys[k + 1]) * 0.25;
-          }
+        const ys = pts.map(p => p.y);
+        for (let k = 1; k < pts.length - 1; k++) {
+          pts[k].y = ys[k] * 0.7 + (ys[k - 1] + ys[k + 1]) * 0.15;
         }
       }
 
@@ -911,9 +1059,12 @@ export class Scene3D {
               continue;
             }
             mesh.visible = true;
-            mesh.renderOrder = 12;
-            const topY = ep.onFloor ? this.floorCapY() : this.pegH;
-            mesh.position.set(attach.x, topY, attach.z);
+            mesh.renderOrder = 16;
+            if (ep && ep.lifted) mesh.position.set(attach.x, this.pegH, attach.z);
+            else {
+              const c = this.capOnEnd(attach);
+              mesh.position.set(c.x, c.y, c.z);
+            }
             mesh.scale.set(1, 1, 1);
             // Plug open mouth under the magnet
             const dir = new THREE.Vector3().subVectors(inner, attach);
@@ -957,7 +1108,7 @@ export class Scene3D {
           const d = new THREE.Vector3().subVectors(inward, end);
           if (d.lengthSq() < 1e-8) return end.clone();
           d.normalize();
-          return end.clone().addScaledVector(d, Math.min(this.ropeR * 0.22, this.capR * 0.18));
+          return end.clone().addScaledVector(d, this.ropeOuter * 0.12);
         };
         const inner0 = filleted[Math.min(1, filleted.length - 1)];
         const inner1 = filleted[Math.max(0, filleted.length - 2)];
@@ -968,7 +1119,7 @@ export class Scene3D {
         if (filleted[0].distanceTo(filleted[filleted.length - 1]) < this.ropeR * 0.15) {
           filleted[filleted.length - 1] = cap1.clone().add(new THREE.Vector3(0.05, 0, 0.02));
         }
-        filleted = enforceMinBendWorld(filleted, this.ropeR * 1.55);
+        filleted = enforceMinBendWorld(filleted, this.ropeR * 1.7);
         filleted[0] = insetEnd(cap0, filleted[Math.min(1, filleted.length - 1)]);
         filleted[filleted.length - 1] = insetEnd(cap1, filleted[Math.max(0, filleted.length - 2)]);
         if (filleted.length >= 3) {
@@ -997,8 +1148,15 @@ export class Scene3D {
           }
         }
         if (newGeom.userData && newGeom.userData.hintN) entry._hintN = newGeom.userData.hintN;
-        entry.mesh.geometry.dispose();
+        if (!newGeom.getAttribute('color')) {
+          const n = newGeom.getAttribute('position').count;
+          const col = new Float32Array(n * 3);
+          col.fill(1);
+          newGeom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        }
+        const oldGeom = entry.mesh.geometry;
         entry.mesh.geometry = newGeom;
+        oldGeom.dispose();
         entry.geom = newGeom;
         entry.mesh.renderOrder = b.layer;
         entry._end0 = cap0.clone();
@@ -1033,7 +1191,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 1.8 * (2 * this.ropeR);
+          const period = 0.58 * (2 * this.ropeOuter);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
@@ -1082,7 +1240,7 @@ export class Scene3D {
           continue;
         }
         mesh.visible = true;
-        mesh.renderOrder = 12;
+        mesh.renderOrder = 16;
         const attach = (pts && pts.length >= 2)
           ? pts[e === 0 ? 0 : pts.length - 1]
           : b.worldPts[e === 0 ? 0 : b.worldPts.length - 1];
@@ -1100,8 +1258,11 @@ export class Scene3D {
             mesh.material.opacity = fade;
           }
         } else {
-          const topY = ep.onFloor ? this.floorCapY() : this.pegH;
-          mesh.position.set(attach.x, topY, attach.z);
+          if (ep && ep.lifted) mesh.position.set(attach.x, this.pegH, attach.z);
+          else {
+            const c = this.capOnEnd(attach);
+            mesh.position.set(c.x, c.y, c.z);
+          }
           mesh.scale.set(sxz, sy, sxz);
           if (mesh.material) {
             mesh.material.transparent = false;
@@ -1208,8 +1369,26 @@ export class Scene3D {
 
   /** Screen position of a cap sitting on a peg (for picking). */
   projectCapOnPeg(peg) {
+    if (!peg) return { x: 0, y: 0 };
+    if (peg.pixelLock) {
+      const w = this.screenToWorld(peg.x, peg.y, this.pegH);
+      return this.projectWorld(w.x, this.pegH, w.z);
+    }
     const w = this.toWorld(peg.x, peg.y);
     return this.projectWorld(w.x, this.pegH + this.capH * 0.5, w.z);
+  }
+
+  /** Mean screen error of authored pixels after raycast onto the rope plane. */
+  centerlineError(screenPts) {
+    if (!screenPts || screenPts.length < 2) return 0;
+    const y = this.ropeR;
+    let sum = 0;
+    for (const p of screenPts) {
+      const w = this.screenToWorld(p.x, p.y, y);
+      const s = this.projectWorld(w.x, y, w.z);
+      sum += Math.hypot(s.x - p.x, s.y - p.y);
+    }
+    return sum / screenPts.length;
   }
 
   /** On-screen radius of a cap in CSS pixels. */

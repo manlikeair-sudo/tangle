@@ -9,7 +9,8 @@ const MAX_SUBSTEPS = 4;
 
 export function makeRopeState(rope) {
   return {
-    id: rope.id, color: rope.color, points: null, z: rope.id,
+    id: rope.id, color: rope.color, bend: rope.bend, path: rope.path || null, points: null,
+    z: rope.layer != null ? rope.layer : rope.id,
     wobble: 0, clearing: false, clearT: 0, stretch: 1,
     elasticRest: 0, tension: 0, _accum: 0,
     _sleeping: false, _stillFrames: 0, _sBiasBaked: false,
@@ -404,7 +405,7 @@ export function simulateRope(rs, ax, ay, bx, by, pegs, pegR, ropeHalf, dt) {
 
   // Sanitize + rein in runaway midpoints BEFORE measuring stretch
   const chordSafe = Math.hypot(bx - ax, by - ay) || 1;
-  const maxDev = Math.max(chordSafe * 1.2, 180);
+  const maxDev = Math.max(chordSafe * 1.2, (rs.elasticRest || 0) * 0.72, 180);
   for (let i = 1; i < n - 1; i++) {
     const p = pts[i];
     const t = i / (n - 1);
@@ -526,8 +527,14 @@ export function captureRest(rs, ax, ay, bx, by) {
   const L = pathLen(rs.points);
   const chord = Math.hypot(bx - ax, by - ay) || 80;
   // Rest ≈ current chord with modest slack — stretch builds as you pull away
-  const fromPath = Number.isFinite(L) ? L * 0.85 : chord * 1.2;
-  rs.elasticRest = Math.max(80, Math.min(chord * 1.55, Math.max(fromPath, chord * 1.12)));
+  const fromPath = Number.isFinite(L) ? L : chord * 1.2;
+  // A curve much longer than its end-to-end chord must keep that length.
+  // Clamping rest to chord*1.55 collapses the body onto the chord on grab.
+  if (fromPath > chord * 1.7) {
+    rs.elasticRest = Math.max(80, fromPath * 0.98);
+  } else {
+    rs.elasticRest = Math.max(80, Math.min(chord * 1.55, Math.max(fromPath * 0.85, chord * 1.12)));
+  }
   rs.stretch = 1;
   rs.tension = 0;
 }
