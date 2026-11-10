@@ -43,7 +43,7 @@ const CASCADE_GAP = 0.4; // seconds after pop before next clear may start
 const CLEAR_SETTLE_NEED = 0.35; // wait after action before counting freeT
 
 const RETRACT_DUR = 0.2;
-const SNAP_DUR = 0.07; // 70 ms ease-in snap to floor/peg
+const SNAP_DUR = 0.12; // ~120 ms, matching the reference snap onto a peg
 const LIFT_DUR = 0.08; // magnetic pop lift
 const FOLLOW_BASE = 0.97; // ref: nearly 1:1 finger tracking
 const MAX_STRETCH = 1.85; // hard rubber stop vs elastic rest
@@ -77,29 +77,37 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
-function layShowcaseArc(rs, bend) {
-  const pts = rs.points;
-  const n = pts.length;
-  const ax = pts[0].x, ay = pts[0].y, bx = pts[n - 1].x, by = pts[n - 1].y;
-  const dx = bx - ax, dy = by - ay;
-  const len = Math.hypot(dx, dy) || 1;
-  const nx = -dy / len, ny = dx / len;
-  const mag = Math.abs(bend) <= 2 ? bend * len : bend;
-  bend = Math.max(-len * 0.42, Math.min(len * 0.42, mag));
-  let path = 0, px = ax, py = ay;
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    const s = Math.sin(t * Math.PI) * bend;
-    const x = ax + dx * t + nx * s;
-    const y = ay + dy * t + ny * s;
-    pts[i].x = x; pts[i].y = y; pts[i].ox = x; pts[i].oy = y;
-    if (i) path += Math.hypot(x - px, y - py);
-    px = x; py = y;
+function layShowcasePath(rs) {
+  const src = rs.path;
+  if (!src || src.length < 2 || !rs.points) return;
+  const pix = src.map(p => ({ x: p[0] * W, y: p[1] * H }));
+  const seg = [];
+  let total = 0;
+  for (let i = 1; i < pix.length; i++) {
+    const d = Math.hypot(pix[i].x - pix[i - 1].x, pix[i].y - pix[i - 1].y);
+    seg.push(d);
+    total += d;
   }
-  rs.elasticRest = Math.max(80, path * 0.98);
-  rs._guide = pts.map(p => ({ x: p.x, y: p.y }));
-  rs._prevPts = pts.map(p => ({ x: p.x, y: p.y }));
-  rs._framePts = pts.map(p => ({ x: p.x, y: p.y }));
+  const n = rs.points.length;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    let dist = (total * i) / (n - 1);
+    let k = 0;
+    while (k < seg.length - 1 && dist > seg[k]) { dist -= seg[k]; k++; }
+    const t = seg[k] > 1e-4 ? dist / seg[k] : 0;
+    const x = pix[k].x + (pix[k + 1].x - pix[k].x) * t;
+    const y = pix[k].y + (pix[k + 1].y - pix[k].y) * t;
+    out.push({ x, y });
+  }
+  for (let i = 0; i < n; i++) {
+    rs.points[i].x = out[i].x; rs.points[i].y = out[i].y;
+    rs.points[i].ox = out[i].x; rs.points[i].oy = out[i].y;
+  }
+  rs.elasticRest = Math.max(80, total * 0.98);
+  rs._guide = out.map(p => ({ x: p.x, y: p.y }));
+  rs._traced = true;
+  rs._prevPts = out.map(p => ({ x: p.x, y: p.y }));
+  rs._framePts = out.map(p => ({ x: p.x, y: p.y }));
   rs._fitDone = true;
   rs.stretch = 1;
 }
@@ -110,10 +118,11 @@ function layoutPegs() {
   const isLandscape = W > H;
   // Board sized so packed cluster (~0.86 of board) ≈ 0.60 W on screen
   if (level.showcase && !isLandscape) {
-    boardW = W * 0.70;
-    boardH = H * 0.52;
-    boardOX = (W - boardW) / 2;
-    boardOY = H * 0.22;
+    // Full frame so traced 0..1 coordinates land on the reference pixels.
+    boardW = W;
+    boardH = H;
+    boardOX = 0;
+    boardOY = 0;
   } else {
     boardW = isLandscape ? Math.min(W * 0.74, H * 1.05) : Math.min(W * 0.74, H * 0.60);
     boardH = boardW * 0.82;
@@ -127,7 +136,7 @@ function layoutPegs() {
     p.x = boardOX + p.nx * boardW;
     p.y = boardOY + p.ny * boardH;
   }
-  scene.setBoardLayout(boardOX, boardOY, boardW, boardH);
+  scene.setBoardLayout(boardOX, boardOY, boardW, boardH, !!(level && level.showcase && !(W > H)));
 }
 
 function loadLevel(idx) {
@@ -149,7 +158,7 @@ function loadLevel(idx) {
   for (const rs of ropeStates) {
     const ends = endPositions(rs.id);
     if (ends) initPoints(rs, ends[0].x, ends[0].y, ends[1].x, ends[1].y, pegs, clear);
-    if (level.showcase && rs.bend != null && rs.points) layShowcaseArc(rs, rs.bend);
+    if (level.showcase && rs.path && rs.points) layShowcasePath(rs);
   }
   for (let s = 0; s < (level.showcase ? 0 : 24); s++) {
     for (const rs of ropeStates) {

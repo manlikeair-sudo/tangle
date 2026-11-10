@@ -148,12 +148,12 @@ export class Scene3D {
       bgC.width = 512; bgC.height = 512;
       const bx = bgC.getContext('2d');
       // White glow only behind cluster; blue-grey floor elsewhere (#DDE3EA mid, #B9C3CF edges)
-      const bg = bx.createRadialGradient(256, 270, 20, 256, 270, 230);
+      const bg = bx.createRadialGradient(256, 210, 10, 256, 230, 250);
       bg.addColorStop(0, '#FFFFFF');
-      bg.addColorStop(0.16, '#F7FBFF');
-      bg.addColorStop(0.38, '#E7EEF5');
-      bg.addColorStop(0.68, '#D3DCE6');
-      bg.addColorStop(1, '#B7C3D0');
+      bg.addColorStop(0.12, '#F4F7FB');
+      bg.addColorStop(0.32, '#D5DEE8');
+      bg.addColorStop(0.62, '#C5D0DC');
+      bg.addColorStop(1, '#AEBCCB');
       bx.fillStyle = bg;
       bx.fillRect(0, 0, 512, 512);
       const bgTex = new THREE.CanvasTexture(bgC);
@@ -169,12 +169,12 @@ export class Scene3D {
     const floorCanvas = document.createElement('canvas');
     floorCanvas.width = 512; floorCanvas.height = 512;
     const fctx = floorCanvas.getContext('2d');
-    const fg = fctx.createRadialGradient(256, 256, 18, 256, 256, 250);
+    const fg = fctx.createRadialGradient(256, 200, 8, 256, 230, 260);
     fg.addColorStop(0, '#FFFFFF');
-    fg.addColorStop(0.14, '#F5F9FD');
-    fg.addColorStop(0.36, '#E4ECF4');
-    fg.addColorStop(0.66, '#D0DAE4');
-    fg.addColorStop(1, '#B4C0CE');
+    fg.addColorStop(0.10, '#F7FAFD');
+    fg.addColorStop(0.28, '#E3EAF2');
+    fg.addColorStop(0.55, '#CDD7E3');
+    fg.addColorStop(1, '#B3C0CE');
     fctx.fillStyle = fg;
     fctx.fillRect(0, 0, 512, 512);
     const floorTex = new THREE.CanvasTexture(floorCanvas);
@@ -251,11 +251,12 @@ export class Scene3D {
     // Peg diameter ~0.055W; rope diameter 0.9× peg ≈ 0.05W
     // Peg posts are the tall landmarks; ropes are a little thinner than a peg.
     // Short stubs. Ropes are about twice as thick as a peg, like the reference.
-    this.pegR = (0.040 * V) / 2;
-    this.ropeR = this.pegR * 1.55;
-    this.capR = this.pegR * 2.15;
-    this.capH = this.pegR * 0.22;
-    this.pegH = this.pegR * 4.2;
+    // Peg diameter matches the reference stubs. Rope width is about 0.9× that.
+    this.pegR = (0.0336 * V) / 2;
+    this.ropeR = this.pegR * 0.90;
+    this.capR = this.ropeR * 1.05;
+    this.capH = this.ropeR * 0.16;
+    this.pegH = this.pegR * 2.8;
   }
 
   resize(cssW, cssH, dpr) {
@@ -273,22 +274,25 @@ export class Scene3D {
     this._placeCamera();
   }
 
-  setBoardLayout(ox, oy, boardW, boardH) {
+  setBoardLayout(ox, oy, boardW, boardH, identityFloor = false) {
     this.ox = ox; this.oy = oy; this.boardW = boardW; this.boardH = boardH;
     const frac = boardW / Math.max(1, this.W);
     this.worldSpan = this.VIEW_W * frac;
+    // Identity floor: a board pixel projects back to that screen pixel at y=0.
+    const aspect = this.H / Math.max(1, this.W);
+    this.zScale = identityFloor ? aspect / Math.cos(this._camTilt) : 0.95;
   }
 
   toWorld(px, py) {
     const nx = (px - this.ox) / this.boardW - 0.5;
     const nz = (py - this.oy) / this.boardH - 0.5;
-    const zScale = 0.95; // tighter cluster like reference
+    const zScale = this.zScale || 0.95;
     return { x: nx * this.worldSpan, z: nz * this.worldSpan * zScale };
   }
 
   /** Inverse of toWorld — board/CSS coords from world XZ. */
   fromWorld(wx, wz) {
-    const zScale = 0.95;
+    const zScale = this.zScale || 0.95;
     const nx = wx / Math.max(1e-6, this.worldSpan);
     const nz = wz / Math.max(1e-6, this.worldSpan * zScale);
     return {
@@ -331,7 +335,7 @@ export class Scene3D {
     const d = this._camDist;
     const t = this._camTilt;
     this.camera.position.set(0, d * Math.cos(t), d * Math.sin(t));
-    this.camera.lookAt(0, 0.2, 0);
+    this.camera.lookAt(0, 0, 0);
     this.camera.up.set(0, 1, 0);
   }
 
@@ -439,10 +443,10 @@ export class Scene3D {
     const mat = new THREE.MeshStandardMaterial({
       map: tex,
       normalMap: nrm,
-      normalScale: new THREE.Vector2(1.05, 1.05),
+      normalScale: new THREE.Vector2(0.45, 0.45),
       color: 0xffffff,
-      roughness: 0.32,
-      metalness: 0.05,
+      roughness: 0.68,
+      metalness: 0.0,
       emissive: baseCol.clone().multiplyScalar(0.08),
       emissiveIntensity: 1,
     });
@@ -545,8 +549,14 @@ export class Scene3D {
 
   _makeCapMesh(color) {
     const group = new THREE.Group();
-    const outer = this.pegR * 2.05;
-    const inner = this.pegR * 0.72;
+    const outer = this.ropeR * 1.02;
+    const inner = this.ropeR * 0.34;
+    const outline = new THREE.Mesh(
+      new THREE.RingGeometry(outer * 0.96, outer * 1.16, 40),
+      new THREE.MeshBasicMaterial({ color: 0x1A2430 })
+    );
+    outline.rotation.x = -Math.PI / 2;
+    outline.position.y = 0.006;
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(inner, outer, 40),
       this._capMat(color)
@@ -555,12 +565,12 @@ export class Scene3D {
     ring.position.y = 0.012;
     ring.receiveShadow = true;
     const hole = new THREE.Mesh(
-      new THREE.CircleGeometry(inner * 0.96, 28),
+      new THREE.CircleGeometry(inner * 0.92, 24),
       new THREE.MeshBasicMaterial({ color: 0x1A2430 })
     );
     hole.rotation.x = -Math.PI / 2;
-    hole.position.y = 0.008;
-    group.add(hole, ring);
+    hole.position.y = 0.009;
+    group.add(outline, hole, ring);
     group.userData.colorHex = color.hex;
     group.userData.body = ring;
     return group;
@@ -596,8 +606,25 @@ export class Scene3D {
     return entry.endCaps;
   }
 
+  /** Traced centerline: keep the S-bends, lay the tube on the floor. */
+  _traceWorldPts(raw, ends) {
+    let pts = raw.map(p => {
+      const w = this.toWorld(p.x, p.y);
+      return { x: w.x, z: w.z };
+    });
+    if (pts.length > 42) pts = resample2D(pts, 36);
+    else if (pts.length < 18) pts = resample2D(pts, 24);
+    const e0 = this.toWorld(ends[0].x, ends[0].y);
+    const e1 = this.toWorld(ends[1].x, ends[1].y);
+    pts[0] = { x: e0.x, z: e0.z };
+    pts[pts.length - 1] = { x: e1.x, z: e1.z };
+    const floorY = this.ropeR * 1.05;
+    return pts.map(p => new THREE.Vector3(p.x, floorY, p.z));
+  }
+
   /** Clean control points for TubeGeometry. */
-  _smoothWorldPts(raw, ends, baseY, scale) {
+  _smoothWorldPts(raw, ends, baseY, scale, keepShape) {
+    if (keepShape) return this._traceWorldPts(raw, ends);
     const minDist = 0.05;
     const cleaned = [];
     let lwx = null, lwz = null;
@@ -636,7 +663,7 @@ export class Scene3D {
 
     // Fixed count, then a heavy smooth so verlet kinks become wide floor arcs.
     pts = resample2D(pts, 20);
-    for (let pass = 0; pass < 10; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       const next = pts.map(p => ({ x: p.x, z: p.z }));
       for (let i = 1; i < pts.length - 1; i++) {
         next[i].x = pts[i].x * 0.42 + (pts[i - 1].x + pts[i + 1].x) * 0.29;
@@ -779,7 +806,7 @@ export class Scene3D {
       const srcPts = (shown && shown.length >= 2) ? shown : rs._wrapPath;
       if (!srcPts || srcPts.length < 2) { built.push(null); continue; }
       const stretch = rs.stretch || 1;
-      const worldPts = this._smoothWorldPts(srcPts, ends, baseY, stretch);
+      const worldPts = this._smoothWorldPts(srcPts, ends, baseY, stretch, !!rs._traced && guided);
       built.push({ rs, ends, layer, baseY, worldPts, stretch });
     }
 
@@ -1036,7 +1063,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 3.4 * (2 * this.ropeR);
+          const period = 2.0 * (2 * this.ropeR);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {

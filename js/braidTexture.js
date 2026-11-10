@@ -13,11 +13,11 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const cg = parseInt(colorHex.slice(3, 5), 16);
   const cb = parseInt(colorHex.slice(5, 7), 16);
 
-  const grooveR = Math.round(cr * 0.62), grooveG = Math.round(cg * 0.62), grooveB = Math.round(cb * 0.62);
-  const crestR = Math.min(255, Math.round(cr * 1.12));
-  const crestG = Math.min(255, Math.round(cg * 1.12));
-  const crestB = Math.min(255, Math.round(cb * 1.12));
-  const twists = 0.42;
+  const grooveR = Math.round(cr * 0.48), grooveG = Math.round(cg * 0.48), grooveB = Math.round(cb * 0.48);
+  const crestR = Math.min(255, Math.round(cr * 1.06));
+  const crestG = Math.min(255, Math.round(cg * 1.06));
+  const crestB = Math.min(255, Math.round(cb * 1.06));
+  const twists = 1.0;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -25,7 +25,7 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
       const ang = (v - twists * u) * Math.PI * 2;
       // Soft wide two-strand twist.
       let t = Math.abs(Math.cos(ang));
-      t = 0.35 + 0.65 * Math.pow(Math.max(0, Math.min(1, t)), 0.8);
+      t = Math.pow(Math.max(0, Math.min(1, t)), 0.65);
       let r, g, b;
       if (t < 0.22) {
         const k = t / 0.22;
@@ -41,7 +41,8 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
         b = cb + (crestB - cb) * k2;
       }
       // Dark rim toward the silhouette of the tube.
-      const wrap = 0.45 + 0.55 * Math.pow(Math.sin(v * Math.PI), 0.55);
+      const edge = Math.pow(Math.sin(v * Math.PI), 0.42);
+      const wrap = 0.28 + 0.72 * edge;
       r *= wrap; g *= wrap; b *= wrap;
 
       const i = (y * size + x) * 4;

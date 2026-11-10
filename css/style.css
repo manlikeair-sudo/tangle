@@ -37,11 +37,7 @@ html, body {
 /* HUD: never cut off — safe-area + fluid scale */
 #hud {
   position: absolute; top: 0; left: 0; right: 0;
-  padding:
-    max(12px, calc(env(safe-area-inset-top, 0px) + 10px))
-    max(12px, env(safe-area-inset-right, 0px))
-    10px
-    max(12px, env(safe-area-inset-left, 0px));
+  padding: 6.1vh 2.4vw 8px 3.3vw;
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: clamp(6px, 1.2vw, 12px);
   pointer-events: none; z-index: 10;
@@ -49,10 +45,11 @@ html, body {
 #hud > * { pointer-events: auto; }
 
 .btn-gear {
-  width: clamp(48px, 6.2vw, 64px);
-  height: clamp(48px, 6.2vw, 64px);
-  border: 4px solid #1a3a8a;
-  border-radius: 14px;
+  width: 7.38vw;
+  height: 7.38vw;
+  min-width: 56px; min-height: 56px;
+  border: 3px solid #163a8c;
+  border-radius: 1.4vw;
   background: #2B6EE1;
   box-shadow: 0 5px 0 #143A9A, 0 8px 16px rgba(0,0,0,.22), inset 0 2px 0 rgba(255,255,255,.35);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -63,12 +60,12 @@ html, body {
 
 #hud-pill {
   display: flex; align-items: stretch;
-  border-radius: 28px; overflow: hidden;
+  border-radius: 2.6vh; overflow: hidden;
   background: #fff;
-  border: 5px solid #fff;
-  box-shadow: 0 10px 24px rgba(20,40,70,.18), 0 0 0 1px rgba(255,255,255,.8);
+  border: 1.05vh solid #fff;
+  box-shadow: 0 8px 18px rgba(20,40,70,.16);
   font-weight: 700; flex-shrink: 1; min-width: 0;
-  max-width: min(78vw, 640px);
+  max-width: min(78vw, 680px);
 }
 
 .pill-level {
@@ -77,22 +74,22 @@ html, body {
   padding: clamp(8px, 1vw, 12px) clamp(14px, 2vw, 22px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   line-height: 0.95;
-  min-width: clamp(78px, 11vw, 118px);
-  border-radius: 22px 0 0 22px;
+  min-width: 10vw;
+  border-radius: 1.4vh 0 0 1.4vh;
 }
-.lvl-label { font-size: clamp(13px, 1.7vw, 18px); font-weight: 600; letter-spacing: 0.01em; }
-.lvl-num { font-size: clamp(28px, 4vw, 40px); font-weight: 700; margin-top: 1px; }
+.lvl-label { font-size: 1.45vh; font-weight: 600; letter-spacing: 0.01em; }
+.lvl-num { font-size: 2.9vh; font-weight: 700; margin-top: 0; }
 
 .pill-timer {
   background: #fff;
   color: #16325C;
   padding: clamp(8px, 1.1vw, 14px) clamp(14px, 2vw, 22px);
   display: flex; align-items: center; gap: clamp(8px, 1vw, 12px);
-  font-size: clamp(28px, 3.6vw, 40px); font-weight: 700; letter-spacing: 0.01em;
+  font-size: 3.5vh; font-weight: 700; letter-spacing: 0.01em;
   border: 0;
   box-shadow: none;
 }
-.clock-svg { flex-shrink: 0; width: clamp(20px, 2.6vw, 28px); height: clamp(20px, 2.6vw, 28px); }
+.clock-svg { flex-shrink: 0; width: 3.4vh; height: 3.4vh; }
 
 .pill-diff {
   background: #7B2CDB;
@@ -100,24 +97,24 @@ html, body {
   padding: clamp(6px, 0.9vw, 10px) clamp(12px, 1.8vw, 18px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 1px;
-  min-width: clamp(68px, 9vw, 96px);
-  border-radius: 0 22px 22px 0;
+  min-width: 8vw;
+  border-radius: 0 1.4vh 1.4vh 0;
 }
-.diff-icon { font-size: clamp(14px, 2vw, 20px); line-height: 1; }
-.diff-text { font-size: clamp(12px, 1.6vw, 16px); font-weight: 700; letter-spacing: 0.04em; }
+.diff-icon { font-size: 2vh; line-height: 1; }
+.diff-text { font-size: 1.35vh; font-weight: 700; letter-spacing: 0.04em; }
 
 #hud-coins {
   background: #16325C;
   color: #fff; border-radius: 999px;
   border: 3px solid #0E2244;
-  padding: clamp(10px, 1.2vw, 14px) clamp(14px, 1.8vw, 20px);
-  font-weight: 700; font-size: clamp(16px, 2.2vw, 22px);
+  padding: 0.6vh 1.6vw 0.6vh 0.5vw;
+  font-weight: 700; font-size: 2.3vh;
   display: flex; align-items: center; gap: 8px;
   box-shadow: 0 4px 0 #0A1830, 0 8px 16px rgba(0,0,0,.2);
   flex-shrink: 0;
-  min-height: clamp(48px, 6.2vw, 64px);
+  min-height: 5.4vh;
 }
-.coin-icon { font-size: clamp(18px, 2.4vw, 24px); filter: saturate(1.3); }
+.coin-icon { font-size: 3.2vh; filter: saturate(1.4); }
 
 .hidden { display: none !important; }
 #settings-panel, #win-overlay, #fail-overlay {
@@ -158,9 +155,9 @@ html, body {
 /* iPad portrait / landscape / small tablets — keep HUD fully visible */
 @media (max-width: 900px) {
   #hud {
-    padding-top: max(10px, calc(env(safe-area-inset-top, 0px) + 8px));
+    padding-top: 5.9vh;
   }
-  #hud-pill { max-width: 58vw; }
+  #hud-pill { max-width: 70vw; }
 }
 @media (max-width: 600px) {
   .btn-gear { width: 48px; height: 48px; border-radius: 14px; }
