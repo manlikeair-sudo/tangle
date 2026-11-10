@@ -1,7 +1,8 @@
 /**
- * Three-strand twist. Colors are the reference rope's lit side and shadow side,
- * written as sRGB so a basic material shows those values on screen.
- * Canvas X runs along the rope, Y around it. One canvas height is one full turn.
+ * Fine same-hue ply. Canvas X runs along the rope, Y around it.
+ * Seven strands per tile, written as sRGB for an unlit material.
+ * Grooves stay in the rope's own hue — never a black or white band.
+ * The median multiplier is ~0.93 so the body stays on the authored hex.
  */
 export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const c = document.createElement('canvas');
@@ -11,28 +12,29 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const d = img.data;
 
   const parse = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-  const sh = parse(darkHex);
-  const lit = parse(lightHex);
-  // One long diagonal per canvas, sheared so the three crests read as a twist.
-  const along = 1;
+  const base = parse(colorHex);
+  const lit = parse(lightHex || colorHex);
+  // Seven plies around the rope. Crest and groove sit either side of ~0.93
+  // so the body median stays on the authored hex, and the groove stays saturated.
+  const strands = 7;
+  const along = 1.7;
+  const crest = [
+    Math.min(255, base[0] * 0.90 + lit[0] * 0.18),
+    Math.min(255, base[1] * 0.90 + lit[1] * 0.18),
+    Math.min(255, base[2] * 0.90 + lit[2] * 0.18),
+  ];
+  const groove = [base[0] * 0.78, base[1] * 0.78, base[2] * 0.78];
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
-      // Three crests around the tube, repeating about once per rope width.
-      const phase = v * 3 * Math.PI * 2 - u * along * Math.PI * 2;
+      const phase = v * strands * Math.PI * 2 - u * along * Math.PI * 2;
       let t = Math.cos(phase) * 0.5 + 0.5;
+      // Rounded ridge: equal crest and groove, not a wide flat band.
       t = t * t * (3 - 2 * t);
-      const sr = sh[0] * 0.82, sg = sh[1] * 0.82, sb = sh[2] * 0.82;
-      let r = sr + (lit[0] - sr) * t;
-      let g = sg + (lit[1] - sg) * t;
-      let b = sb + (lit[2] - sb) * t;
-      if (t > 0.92) {
-        const h = (t - 0.92) / 0.08;
-        r += (255 - r) * h * 0.12;
-        g += (255 - g) * h * 0.12;
-        b += (255 - b) * h * 0.12;
-      }
+      const r = groove[0] + (crest[0] - groove[0]) * t;
+      const g = groove[1] + (crest[1] - groove[1]) * t;
+      const b = groove[2] + (crest[2] - groove[2]) * t;
       const i = (y * size + x) * 4;
       d[i] = Math.min(255, Math.max(0, r));
       d[i + 1] = Math.min(255, Math.max(0, g));

@@ -3,7 +3,7 @@ export function showcaseLevel() {
   const C = {
     peach: { name: 'peach', hex: '#F2B79A', dark: '#C48462', light: '#FFD0B8' },
     navy: { name: 'navy', hex: '#3A4460', dark: '#242A3C', light: '#66748F' },
-    cyan: { name: 'cyan', hex: '#3EC0E4', dark: '#1A7EA8', light: '#7ED4F2' },
+    cyan: { name: 'cyan', hex: '#2AD4FA', dark: '#1490B8', light: '#7EE6FF' },
     blue: { name: 'blue', hex: '#1F4CB5', dark: '#12307A', light: '#5B86E0' },
     red: { name: 'red', hex: '#E23B34', dark: '#A0201C', light: '#F06A62' },
     redB: { name: 'redB', hex: '#E23B34', dark: '#A0201C', light: '#F06A62' },

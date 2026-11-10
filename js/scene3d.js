@@ -19,6 +19,7 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
   const tubular = tubularSegments;
   const verts = [];
   const normals = [];
+  const colors = [];
   const uvs = [];
   const indices = [];
   const P = new THREE.Vector3();
@@ -61,6 +62,10 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
       let nz = rz * r - drdAng * az - drdS * T.z;
       const len = Math.hypot(nx, ny, nz) || 1;
       normals.push(nx / len, ny / len, nz / len);
+      // Soft top-light so the cylinder reads as round. The ply itself stays in the texture.
+      const up = ny / len * 0.5 + 0.5;
+      const shade = 0.84 + 0.16 * up;
+      colors.push(shade, shade, shade);
       verts.push(P.x + r * rx, P.y + r * ry, P.z + r * rz);
       uvs.push(i / tubular, v);
     }
@@ -79,6 +84,7 @@ function buildParallelTransportTube(curve, tubularSegments, radius, radialSegmen
   geom.setIndex(indices);
   geom.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   // stash for integrity/debug
   geom.parameters = { path: curve, tubularSegments, radius, radialSegments, closed: false };
@@ -442,76 +448,71 @@ export class Scene3D {
     if (this.texCache.has(key)) return this.texCache.get(key);
     // Solid rope colour. The 3-ply shape is in the displaced vertices, so the
     // highlight and the groove come from the light, not from a painted stripe.
-    const shade = (hex, f) => {
-      const n = parseInt(hex.slice(1), 16);
-      const ch = (s) => Math.max(0, Math.min(255, Math.round(((n >> s) & 255) * f)));
-      return '#' + [16, 8, 0].map(s => ch(s).toString(16).padStart(2, '0')).join('');
-    };
-    const canvas = makeBraidCanvas(color.hex, shade(color.hex, 0.62), shade(color.hex, 1.08), 512);
+    const canvas = makeBraidCanvas(color.hex, color.hex, color.light, 512);
     const tex = new THREE.CanvasTexture(canvas);
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.repeat.set(8, 1);
-    if (!this._braidNormal) {
-      const nc = makeBraidNormalCanvas(512);
-      this._braidNormal = new THREE.CanvasTexture(nc);
-      this._braidNormal.wrapS = THREE.RepeatWrapping;
-      this._braidNormal.wrapT = THREE.RepeatWrapping;
-      this._braidNormal.needsUpdate = true;
-    }
-    const nrm = this._braidNormal.clone();
-    nrm.wrapS = THREE.RepeatWrapping;
-    nrm.wrapT = THREE.RepeatWrapping;
-    nrm.repeat.set(8, 1);
-    // Opaque saturated body. Grooves are a darker shade of the same hue.
-    const mat = new THREE.MeshStandardMaterial({
+    tex.repeat.set(6, 1);
+    // Unlit so the sampled colour is the texture, not a lighting crush.
+    // Vertex colour only adds the soft cylindrical shade (0.90–1.0).
+    const mat = new THREE.MeshBasicMaterial({
       map: tex,
       color: 0xffffff,
-      normalMap: nrm,
-      normalScale: new THREE.Vector2(0.35, 0.35),
-      roughness: 0.42,
-      metalness: 0.0,
+      vertexColors: true,
     });
     this.texCache.set(key, mat);
     return mat;
   }
 
   _capMat(color) {
-    const key = 'cap|' + color.hex;
+    const key = 'cap|' + color.hex + '|' + color.light;
     if (this.texCache.has(key)) return this.texCache.get(key);
+    const size = 256;
     const c = document.createElement('canvas');
-    c.width = 128; c.height = 128;
+    c.width = size; c.height = size;
     const ctx = c.getContext('2d');
-    const cx = 64, cy = 64;
-    ctx.clearRect(0, 0, 128, 128);
-    const img = ctx.createImageData(128, 128);
+    const img = ctx.createImageData(size, size);
     const d = img.data;
     const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
     const col = hex(color.hex);
     const lit = hex(color.light);
-    for (let y = 0; y < 128; y++) {
-      for (let x = 0; x < 128; x++) {
-        const dx = (x - 63.5) / 60, dy = (y - 63.5) / 60;
+    // Specular sits up-left of the hole, matching the reference eye.
+    const specX = -0.10, specY = -0.11;
+    const clamp = (v) => Math.max(0, Math.min(255, v));
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = (x + 0.5 - size / 2) / (size * 0.46);
+        const dy = (y + 0.5 - size / 2) / (size * 0.46);
         const rad = Math.hypot(dx, dy);
-        const i = (y * 128 + x) * 4;
+        const i = (y * size + x) * 4;
         if (rad > 1) { d[i + 3] = 0; continue; }
         let r, g, b;
-        if (rad < 0.48) {
-          const k = rad / 0.48;
-          r = 8 + 14 * k; g = 8 + 10 * k; b = 10 + 12 * k;
-        } else if (rad > 0.86) {
-          const k = Math.min(1, (rad - 0.86) / 0.14);
-          r = col[0] + (lit[0] - col[0]) * (0.4 + 0.6 * k);
-          g = col[1] + (lit[1] - col[1]) * (0.4 + 0.6 * k);
-          b = col[2] + (lit[2] - col[2]) * (0.4 + 0.6 * k);
+        if (rad < 0.40) {
+          const sd = Math.hypot(dx - specX, dy - specY);
+          const spec = Math.exp(-(sd * sd) / (2 * 0.13 * 0.13));
+          const occ = rad / 0.40;
+          const base = 16 + 10 * (1 - occ);
+          r = base + spec * (248 - base);
+          g = base + spec * (250 - base);
+          b = base + 6 + spec * (252 - base);
+        } else if (rad < 0.68) {
+          const k = (rad - 0.40) / 0.28;
+          const whiteMix = 0.62 * (1 - k) + 0.08;
+          const lipR = lit[0] + (255 - lit[0]) * whiteMix;
+          const lipG = lit[1] + (255 - lit[1]) * whiteMix;
+          const lipB = lit[2] + (255 - lit[2]) * whiteMix;
+          const body = k * k;
+          r = lipR * (1 - body) + col[0] * body;
+          g = lipG * (1 - body) + col[1] * body;
+          b = lipB * (1 - body) + col[2] * body;
         } else {
-          const k = (rad - 0.48) / 0.38;
-          r = col[0] + (lit[0] - col[0]) * k * 0.55;
-          g = col[1] + (lit[1] - col[1]) * k * 0.55;
-          b = col[2] + (lit[2] - col[2]) * k * 0.55;
+          const k = Math.min(1, (rad - 0.68) / 0.32);
+          r = lit[0] * (1 - k) * 0.25 + col[0] * (0.75 + 0.25 * k);
+          g = lit[1] * (1 - k) * 0.25 + col[1] * (0.75 + 0.25 * k);
+          b = lit[2] * (1 - k) * 0.25 + col[2] * (0.75 + 0.25 * k);
         }
-        d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+        d[i] = clamp(r); d[i + 1] = clamp(g); d[i + 2] = clamp(b); d[i + 3] = 255;
       }
     }
     ctx.putImageData(img, 0, 0);
@@ -520,6 +521,21 @@ export class Scene3D {
     const mat = new THREE.MeshBasicMaterial({
       map: tex, color: 0xffffff, transparent: true,
     });
+    this.texCache.set(key, mat);
+    return mat;
+  }
+
+  _capDomeMat(color) {
+    const key = 'dome|' + color.hex + '|' + color.light;
+    if (this.texCache.has(key)) return this.texCache.get(key);
+    // Solid colour. A braid map on the sphere's lat-long UVs turns into
+    // concentric rings around the hole, which reads as a swirl.
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+    });
+    mat.userData.hex = color.hex;
+    mat.userData.light = color.light;
     this.texCache.set(key, mat);
     return mat;
   }
@@ -595,18 +611,31 @@ export class Scene3D {
   _makeCapMesh(color) {
     const group = new THREE.Group();
     const outer = this.capR;
-    // Rounded tip the same width as the rope, with the grommet on its face.
-    const dome = new THREE.Mesh(
-      new THREE.SphereGeometry(outer, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
-      this._ropeMat(color)
-    );
-    dome.scale.set(1, 0.42, 1);
+    // Open the pole so the braid cannot pinch into a spiral, and seat the
+    // grommet in that mouth. The shoulder keeps the same ply as the rope.
+    const theta0 = 0.92;
+    const domeGeom = new THREE.SphereGeometry(outer, 40, 18, 0, Math.PI * 2, theta0, Math.PI * 0.5 - theta0 + 0.08);
+    const col = new THREE.Color(color.hex);
+    const lit = new THREE.Color(color.light);
+    const nrm = domeGeom.attributes.normal;
+    const domeCols = new Float32Array(nrm.count * 3);
+    for (let i = 0; i < nrm.count; i++) {
+      const up = Math.max(0, nrm.getY(i));
+      const k = 0.86 + 0.20 * up;
+      domeCols[i * 3] = Math.min(1, col.r * k * 0.82 + lit.r * 0.18);
+      domeCols[i * 3 + 1] = Math.min(1, col.g * k * 0.82 + lit.g * 0.18);
+      domeCols[i * 3 + 2] = Math.min(1, col.b * k * 0.82 + lit.b * 0.18);
+    }
+    domeGeom.setAttribute('color', new THREE.BufferAttribute(domeCols, 3));
+    const dome = new THREE.Mesh(domeGeom, this._capDomeMat(color));
+    dome.scale.set(1, 0.86, 1);
+    const mouthY = Math.cos(theta0) * 0.86 * outer;
     const face = new THREE.Mesh(
-      new THREE.CircleGeometry(outer * 0.92, 40),
+      new THREE.CircleGeometry(Math.sin(theta0) * outer * 1.04, 48),
       this._capMat(color)
     );
     face.rotation.x = -Math.PI / 2;
-    face.position.y = outer * 0.34;
+    face.position.y = mouthY + outer * 0.02;
     face.renderOrder = 16;
     dome.renderOrder = 15;
     group.add(dome, face);
@@ -1084,6 +1113,12 @@ export class Scene3D {
           }
         }
         if (newGeom.userData && newGeom.userData.hintN) entry._hintN = newGeom.userData.hintN;
+        if (!newGeom.getAttribute('color')) {
+          const n = newGeom.getAttribute('position').count;
+          const col = new Float32Array(n * 3);
+          col.fill(1);
+          newGeom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+        }
         const oldGeom = entry.mesh.geometry;
         entry.mesh.geometry = newGeom;
         oldGeom.dispose();
@@ -1121,7 +1156,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 0.7 * (2 * this.ropeOuter);
+          const period = 0.58 * (2 * this.ropeOuter);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
