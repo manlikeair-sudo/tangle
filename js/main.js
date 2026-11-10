@@ -133,12 +133,13 @@ function layoutPegs() {
     const hudReserve = Math.max(isLandscape ? 70 : 110, (isLandscape ? H * 0.095 : H * 0.12));
     boardOY = hudReserve + Math.max(0, (H - hudReserve - boardH) * 0.36);
   }
-  const pegShift = (level.showcase && !(W > H))
-    ? scene.pegH * (W / scene.VIEW_W) * Math.sin(scene._camTilt)
-    : 0;
+  const kProj = (W / scene.VIEW_W) * Math.sin(scene._camTilt);
+  const ropeShift = (level.showcase && !(W > H)) ? scene.ropeR * 1.05 * kProj : 0;
+  const pegTopShift = (level.showcase && !(W > H)) ? scene.pegH * kProj : 0;
   for (const p of pegs) {
     p.x = boardOX + p.nx * boardW;
-    p.y = boardOY + p.ny * boardH + pegShift;
+    const shift = p.anchor === 'top' ? pegTopShift : ropeShift;
+    p.y = boardOY + p.ny * boardH + shift;
   }
   scene.setBoardLayout(boardOX, boardOY, boardW, boardH, !!(level && level.showcase && !(W > H)));
 }

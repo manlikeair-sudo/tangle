@@ -258,7 +258,7 @@ export class Scene3D {
     this.ropeR = 0.275;
     this.capR = this.ropeR * 1.08;
     this.capH = this.ropeR * 0.16;
-    this.pegH = this.pegR * 4.2;
+    this.pegH = this.pegR * 7.0;
   }
 
   resize(cssW, cssH, dpr) {
@@ -527,9 +527,9 @@ export class Scene3D {
       ao.rotation.x = -Math.PI / 2;
       ao.position.y = 0.015;
       ao.renderOrder = 1;
-      body.renderOrder = 5;
-      top.renderOrder = 6;
-      rim.renderOrder = 6;
+      body.renderOrder = 16;
+      top.renderOrder = 18;
+      rim.renderOrder = 18;
       group.add(ao, body, top, rim);
       group.userData.body = body;
       this.scene.add(group);
@@ -552,27 +552,34 @@ export class Scene3D {
   _makeCapMesh(color) {
     const group = new THREE.Group();
     const outer = this.capR;
-    const inner = this.ropeR * 0.42;
+    const inner = outer * 0.34;
+    const dark = new THREE.Color(color.dark);
     const outline = new THREE.Mesh(
-      new THREE.RingGeometry(outer * 0.96, outer * 1.16, 40),
-      new THREE.MeshBasicMaterial({ color: 0x1A2430 })
+      new THREE.RingGeometry(outer * 0.98, outer * 1.06, 48),
+      new THREE.MeshStandardMaterial({ color: dark, roughness: 0.55, metalness: 0 })
     );
     outline.rotation.x = -Math.PI / 2;
-    outline.position.y = 0.006;
+    outline.position.y = 0.004;
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(inner, outer, 40),
+      new THREE.RingGeometry(inner * 1.15, outer * 0.98, 48),
       this._capMat(color)
     );
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.012;
     ring.receiveShadow = true;
+    const shine = new THREE.Mesh(
+      new THREE.RingGeometry(outer * 0.72, outer * 0.98, 48),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(color.light) })
+    );
+    shine.rotation.x = -Math.PI / 2;
+    shine.position.y = 0.016;
     const hole = new THREE.Mesh(
       new THREE.CircleGeometry(inner * 0.92, 24),
       new THREE.MeshBasicMaterial({ color: 0x1A2430 })
     );
     hole.rotation.x = -Math.PI / 2;
     hole.position.y = 0.009;
-    group.add(outline, hole, ring);
+    group.add(outline, hole, ring, shine);
     group.userData.colorHex = color.hex;
     group.userData.body = ring;
     return group;
@@ -800,7 +807,7 @@ export class Scene3D {
         built.push(null);
         continue;
       }
-      const layer = Math.min(3, (rs.z || i) % 4);
+      const layer = rs.z != null ? rs.z : i;
       // Rest on floor; stacking only via crossing lifts (~1 rope thickness)
       const baseY = this.ropeR * 1.28;
       const guided = rs._guide && !rs._dragging && !rs._playerTouched && !rs.clearing;

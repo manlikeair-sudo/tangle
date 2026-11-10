@@ -74,8 +74,8 @@ html, body {
   padding: clamp(8px, 1vw, 12px) clamp(14px, 2vw, 22px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   line-height: 0.95;
-  min-width: 10vw;
-  border-radius: 1.4vh 0 0 1.4vh;
+  min-width: 96px;
+  border-radius: 0;
 }
 .lvl-label { font-size: 18px; font-weight: 600; letter-spacing: 0.01em; }
 .lvl-num { font-size: 36px; font-weight: 700; margin-top: 0; }
@@ -87,9 +87,9 @@ html, body {
   display: flex; align-items: center; gap: clamp(8px, 1vw, 12px);
   font-size: 40px; font-weight: 700; letter-spacing: 0.01em;
   border: 0;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 3px #D5DCE4;
 }
-.clock-svg { flex-shrink: 0; width: 48px; height: 48px; }
+.clock-svg { flex-shrink: 0; width: 52px; height: 52px; }
 
 .pill-diff {
   background: #7B2CDB;
@@ -97,10 +97,10 @@ html, body {
   padding: clamp(6px, 0.9vw, 10px) clamp(12px, 1.8vw, 18px);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 1px;
-  min-width: 8vw;
-  border-radius: 0 1.4vh 1.4vh 0;
+  min-width: 84px;
+  border-radius: 0;
 }
-.cat-svg { width: 42px; height: 42px; display: block; }
+.cat-svg { width: 46px; height: 46px; display: block; }
 .diff-text { font-size: 16px; font-weight: 700; letter-spacing: 0.06em; }
 
 #hud-coins {

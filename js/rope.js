@@ -9,7 +9,8 @@ const MAX_SUBSTEPS = 4;
 
 export function makeRopeState(rope) {
   return {
-    id: rope.id, color: rope.color, bend: rope.bend, path: rope.path || null, points: null, z: rope.id,
+    id: rope.id, color: rope.color, bend: rope.bend, path: rope.path || null, points: null,
+    z: rope.layer != null ? rope.layer : rope.id,
     wobble: 0, clearing: false, clearT: 0, stretch: 1,
     elasticRest: 0, tension: 0, _accum: 0,
     _sleeping: false, _stillFrames: 0, _sBiasBaked: false,
