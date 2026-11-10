@@ -148,12 +148,12 @@ export class Scene3D {
       bgC.width = 512; bgC.height = 512;
       const bx = bgC.getContext('2d');
       // White glow only behind cluster; blue-grey floor elsewhere (#DDE3EA mid, #B9C3CF edges)
-      const bg = bx.createRadialGradient(256, 210, 10, 256, 230, 250);
+      const bg = bx.createRadialGradient(256, 248, 8, 256, 250, 280);
       bg.addColorStop(0, '#FFFFFF');
-      bg.addColorStop(0.12, '#F4F7FB');
-      bg.addColorStop(0.32, '#D5DEE8');
-      bg.addColorStop(0.62, '#C5D0DC');
-      bg.addColorStop(1, '#AEBCCB');
+      bg.addColorStop(0.08, '#F4F8FC');
+      bg.addColorStop(0.22, '#D5DEE8');
+      bg.addColorStop(0.5, '#B7C2CE');
+      bg.addColorStop(1, '#A9AEB7');
       bx.fillStyle = bg;
       bx.fillRect(0, 0, 512, 512);
       const bgTex = new THREE.CanvasTexture(bgC);
@@ -169,12 +169,14 @@ export class Scene3D {
     const floorCanvas = document.createElement('canvas');
     floorCanvas.width = 512; floorCanvas.height = 512;
     const fctx = floorCanvas.getContext('2d');
-    const fg = fctx.createRadialGradient(256, 200, 8, 256, 230, 260);
+    const fg = fctx.createRadialGradient(256, 248, 6, 256, 256, 270);
     fg.addColorStop(0, '#FFFFFF');
-    fg.addColorStop(0.10, '#F7FAFD');
-    fg.addColorStop(0.28, '#E3EAF2');
-    fg.addColorStop(0.55, '#CDD7E3');
-    fg.addColorStop(1, '#B3C0CE');
+    fg.addColorStop(0.05, '#F5FAFF');
+    fg.addColorStop(0.12, '#E7EEF6');
+    fg.addColorStop(0.22, '#D0DAE4');
+    fg.addColorStop(0.4, '#B7C2CC');
+    fg.addColorStop(0.7, '#A9B3BD');
+    fg.addColorStop(1, '#A4ADB6');
     fctx.fillStyle = fg;
     fctx.fillRect(0, 0, 512, 512);
     const floorTex = new THREE.CanvasTexture(floorCanvas);
@@ -190,7 +192,7 @@ export class Scene3D {
 
     this.shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(18, 22),
-      new THREE.ShadowMaterial({ opacity: 0.40 })
+      new THREE.ShadowMaterial({ opacity: 0.22 })
     );
     this.shadowFloor.rotation.x = -Math.PI / 2;
     this.shadowFloor.position.y = 0.008;
@@ -198,31 +200,25 @@ export class Scene3D {
     this.scene.add(this.shadowFloor);
 
     // Brighter hemi/ambient so MeshStandard braid stays saturated (no grey wash)
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8a9aa8, 0.38);
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0xc5d0dc, 0.55);
     this.scene.add(this.hemi);
-    // High soft key → tight darker contact shadows under ropes
-    this.sun = new THREE.DirectionalLight(0xffffff, 1.15);
-    this.sun.position.set(2.4, 9.5, -8.5); // low and up-screen so shadows run long, down-left
+    // Overhead and on the camera side, so the visible face is the lit side
+    // and the contact shadow stays short.
+    this.sun = new THREE.DirectionalLight(0xffffff, 0.72);
+    this.sun.position.set(0.4, 24, 7);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 45;
+    this.sun.shadow.camera.far = 50;
     this.sun.shadow.camera.left = -8;
     this.sun.shadow.camera.right = 8;
     this.sun.shadow.camera.top = 8;
     this.sun.shadow.camera.bottom = -8;
-    this.sun.shadow.bias = -0.00025;
-    this.sun.shadow.normalBias = 0.02;
-    this.sun.shadow.radius = 2.4;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.radius = 10;
     this.scene.add(this.sun);
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.18));
-    const fill = new THREE.DirectionalLight(0xe8f4ff, 0.32);
-    fill.position.set(-5, 12, 5);
-    this.scene.add(fill);
-    // Low-angle rim so tube limbs read round from top-down
-    const rim = new THREE.DirectionalLight(0xffffff, 0.45);
-    rim.position.set(8, 4, 3);
-    this.scene.add(rim);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 
     this.VIEW_W = 10;
     this._applyTargetProportions();
@@ -255,9 +251,9 @@ export class Scene3D {
     // Screen target on an 894-wide frame: peg top ~31px, rope ~31px (measured, then scaled).
     // Tuned so an 894px-wide frame measures: peg top ~32px, rope ~42px (reference inscribed widths).
     // 41px rope diameter on an 894-wide frame (VIEW_W = 10).
-    this.ropeR = 41 / (2 * (894 / 10));
+    this.ropeR = 56 / (2 * (894 / 10));
     this.pegR = 33 / (2 * (894 / 10));
-    this.capR = this.ropeR * 1.30;
+    this.capR = this.ropeR * 1.36;
     this.capH = 0.35 * (2 * this.ropeR);
     this.pegH = 1.6 * (2 * this.ropeR);
   }
@@ -332,8 +328,8 @@ export class Scene3D {
   }
 
   floorCapY() {
-    // Cap disc sits just above the floor rope height
-    return Math.max(this.ropeR * 0.35, this.capH * 0.55);
+    // Above the tube so the washer paints over the rope end.
+    return this.ropeR * 2.45;
   }
 
   _placeCamera() {
@@ -443,18 +439,12 @@ export class Scene3D {
     nrm.magFilter = THREE.LinearFilter;
     nrm.anisotropy = aniso;
     nrm.repeat.set(4, 1);
-    const baseCol = new THREE.Color(color.hex);
-    // Helix3 material: roughness 0.55, normalScale 1.15 — round tube shading
-    const mat = new THREE.MeshStandardMaterial({
+    // Basic so the baked lit/shadow colors survive the lights. The normal is unused.
+    const mat = new THREE.MeshBasicMaterial({
       map: tex,
-      normalMap: nrm,
-      normalScale: new THREE.Vector2(1.15, 1.15),
       color: 0xffffff,
-      roughness: 0.32,
-      metalness: 0.0,
-      emissive: baseCol.clone().multiplyScalar(0.08),
-      emissiveIntensity: 1,
     });
+    mat.userData.normalMap = nrm;
     this.texCache.set(key, mat);
     return mat;
   }
@@ -466,30 +456,24 @@ export class Scene3D {
     c.width = 128; c.height = 128;
     const ctx = c.getContext('2d');
     const cx = 64, cy = 64;
+    const body = ctx.createRadialGradient(cx - 10, cy - 14, 8, cx, cy, 62);
+    body.addColorStop(0, color.light);
+    body.addColorStop(0.22, color.light);
+    body.addColorStop(0.62, color.hex);
+    body.addColorStop(1, color.dark);
     ctx.beginPath(); ctx.arc(cx, cy, 62, 0, Math.PI * 2);
-    ctx.fillStyle = color.hex; ctx.fill();
-    const rim = ctx.createRadialGradient(cx, cy, 40, cx, cy, 62);
-    rim.addColorStop(0, 'rgba(0,0,0,0)');
-    rim.addColorStop(0.75, 'rgba(0,0,0,0.04)');
-    rim.addColorStop(1, 'rgba(0,0,0,0.2)');
-    ctx.fillStyle = rim; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 30, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 23, 0, Math.PI * 2);
-    const dark = ctx.createRadialGradient(cx - 3, cy - 4, 1, cx, cy, 23);
-    dark.addColorStop(0, color.dark);
-    dark.addColorStop(0.65, color.dark);
-    dark.addColorStop(1, '#120808');
-    ctx.fillStyle = dark; ctx.fill();
-    ctx.beginPath(); ctx.arc(cx, cy, 23, 0, Math.PI * 2);
-    ctx.strokeStyle = color.dark; ctx.lineWidth = 1.1; ctx.stroke();
+    ctx.fillStyle = body; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+    const hole = ctx.createRadialGradient(cx - 4, cy - 5, 1, cx, cy, 22);
+    hole.addColorStop(0, '#2A3038');
+    hole.addColorStop(1, '#0C1014');
+    ctx.fillStyle = hole; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, 62, 0, Math.PI * 2);
+    ctx.strokeStyle = color.dark; ctx.lineWidth = 3; ctx.stroke();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const base = new THREE.Color(color.hex);
-    const mat = new THREE.MeshStandardMaterial({
-      map: tex, color: 0xffffff,
-      roughness: 0.45, metalness: 0.0,
-      emissive: base.clone().multiplyScalar(0.1), emissiveIntensity: 1,
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, color: 0xffffff, depthTest: false,
     });
     this.texCache.set(key, mat);
     return mat;
@@ -560,36 +544,27 @@ export class Scene3D {
   _makeCapMesh(color) {
     const group = new THREE.Group();
     const outer = this.capR;
-    const inner = outer * 0.34;
     const dark = new THREE.Color(color.dark);
     const outline = new THREE.Mesh(
-      new THREE.RingGeometry(outer * 0.98, outer * 1.06, 48),
-      new THREE.MeshStandardMaterial({ color: dark, roughness: 0.55, metalness: 0 })
+      new THREE.RingGeometry(outer * 0.96, outer * 1.05, 48),
+      new THREE.MeshBasicMaterial({ color: dark, depthTest: false })
     );
     outline.rotation.x = -Math.PI / 2;
-    outline.position.y = 0.004;
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(inner * 1.15, outer * 0.98, 48),
+    outline.position.y = 0.01;
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(outer * 0.98, 48),
       this._capMat(color)
     );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.012;
-    ring.receiveShadow = true;
-    const shine = new THREE.Mesh(
-      new THREE.RingGeometry(outer * 0.72, outer * 0.98, 48),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(color.light) })
-    );
-    shine.rotation.x = -Math.PI / 2;
-    shine.position.y = 0.016;
-    const hole = new THREE.Mesh(
-      new THREE.CircleGeometry(inner * 0.92, 24),
-      new THREE.MeshBasicMaterial({ color: 0x1A2430 })
-    );
-    hole.rotation.x = -Math.PI / 2;
-    hole.position.y = 0.009;
-    group.add(outline, hole, ring, shine);
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.02;
+    disc.material.depthTest = false;
+    group.add(outline, disc);
+    for (const child of group.children) {
+      child.renderOrder = 50;
+      child.material.depthTest = false;
+    }
     group.userData.colorHex = color.hex;
-    group.userData.body = ring;
+    group.userData.body = disc;
     return group;
   }
 
@@ -960,8 +935,8 @@ export class Scene3D {
               continue;
             }
             mesh.visible = true;
-            mesh.renderOrder = 12;
-            const topY = (ep && ep.lifted) ? this.pegH : 0;
+            mesh.renderOrder = 40;
+            const topY = (ep && ep.lifted) ? this.pegH : this.floorCapY();
             mesh.position.set(attach.x, topY, attach.z);
             mesh.scale.set(1, 1, 1);
             // Plug open mouth under the magnet
@@ -1083,7 +1058,7 @@ export class Scene3D {
         }
         try {
           const len = curve.getLength();
-          const period = 2.0 * (2 * this.ropeR);
+          const period = 1.25 * (2 * this.ropeR);
           const uRepeat = Math.max(2, len / period);
           if (entry._uRepeat == null) entry._uRepeat = uRepeat;
           else {
@@ -1132,7 +1107,7 @@ export class Scene3D {
           continue;
         }
         mesh.visible = true;
-        mesh.renderOrder = 12;
+        mesh.renderOrder = 40;
         const attach = (pts && pts.length >= 2)
           ? pts[e === 0 ? 0 : pts.length - 1]
           : b.worldPts[e === 0 ? 0 : b.worldPts.length - 1];
@@ -1150,7 +1125,7 @@ export class Scene3D {
             mesh.material.opacity = fade;
           }
         } else {
-          const topY = (ep && ep.lifted) ? this.pegH : 0;
+          const topY = (ep && ep.lifted) ? this.pegH : this.floorCapY();
           mesh.position.set(attach.x, topY, attach.z);
           mesh.scale.set(sxz, sy, sxz);
           if (mesh.material) {

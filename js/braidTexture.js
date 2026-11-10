@@ -1,6 +1,7 @@
 /**
- * Two-strand candy-cane braid, like the reference ropes.
- * |cos| gives two equal glossy strands per twist. 1 UV = 1 full twist.
+ * Three-strand twist. Colors are the reference rope's lit side and shadow side,
+ * written as sRGB so a basic material shows those values on screen.
+ * Canvas X runs along the rope, Y around it. One canvas height is one full turn.
  */
 export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const c = document.createElement('canvas');
@@ -9,42 +10,29 @@ export function makeBraidCanvas(colorHex, darkHex, lightHex, size = 512) {
   const img = ctx.createImageData(size, size);
   const d = img.data;
 
-  const cr = parseInt(colorHex.slice(1, 3), 16);
-  const cg = parseInt(colorHex.slice(3, 5), 16);
-  const cb = parseInt(colorHex.slice(5, 7), 16);
-
-  const grooveR = Math.round(cr * 0.48), grooveG = Math.round(cg * 0.48), grooveB = Math.round(cb * 0.48);
-  const crestR = Math.min(255, Math.round(cr * 1.06));
-  const crestG = Math.min(255, Math.round(cg * 1.06));
-  const crestB = Math.min(255, Math.round(cb * 1.06));
-  const twists = 1.0;
+  const parse = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const sh = parse(darkHex);
+  const lit = parse(lightHex);
+  // One long diagonal per canvas, sheared so the three crests read as a twist.
+  const along = 1;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
-      const ang = (v - twists * u) * Math.PI * 2;
-      // Soft wide two-strand twist.
-      let t = Math.abs(Math.cos(ang));
-      t = Math.pow(Math.max(0, Math.min(1, t)), 0.65);
-      let r, g, b;
-      if (t < 0.22) {
-        const k = t / 0.22;
-        const k2 = k * k * (3 - 2 * k);
-        r = grooveR + (cr - grooveR) * k2;
-        g = grooveG + (cg - grooveG) * k2;
-        b = grooveB + (cb - grooveB) * k2;
-      } else {
-        const k = (t - 0.22) / 0.78;
-        const k2 = k * k * (3 - 2 * k);
-        r = cr + (crestR - cr) * k2;
-        g = cg + (crestG - cg) * k2;
-        b = cb + (crestB - cb) * k2;
+      // Three crests around the tube, repeating about once per rope width.
+      const phase = v * 3 * Math.PI * 2 - u * along * Math.PI * 2;
+      let t = Math.cos(phase) * 0.5 + 0.5;
+      t = t * t * (3 - 2 * t);
+      const sr = sh[0] * 0.82, sg = sh[1] * 0.82, sb = sh[2] * 0.82;
+      let r = sr + (lit[0] - sr) * t;
+      let g = sg + (lit[1] - sg) * t;
+      let b = sb + (lit[2] - sb) * t;
+      if (t > 0.9) {
+        const h = (t - 0.9) / 0.1;
+        r += (255 - r) * h * 0.28;
+        g += (255 - g) * h * 0.28;
+        b += (255 - b) * h * 0.28;
       }
-      // Dark rim toward the silhouette of the tube.
-      const rim = Math.sin(v * Math.PI);
-      const wrap = 0.9 + 0.1 * Math.pow(rim, 0.8);
-      r *= wrap; g *= wrap; b *= wrap;
-
       const i = (y * size + x) * 4;
       d[i] = Math.min(255, Math.max(0, r));
       d[i + 1] = Math.min(255, Math.max(0, g));
@@ -62,16 +50,15 @@ export function makeBraidNormalCanvas(size = 512) {
   const ctx = c.getContext('2d');
   const img = ctx.createImageData(size, size);
   const d = img.data;
-  const twists = 1.0;
-  const strength = 1.6;
+  const along = 1.15;
+  const strength = 2.4;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
-      const ang = (v - twists * u) * Math.PI * 2;
       const eps = 1 / size;
       const h = (uu, vv) => {
-        const a = (vv - twists * uu) * Math.PI * 2;
-        return Math.pow(Math.abs(Math.cos(a)), 0.32);
+        const phase = vv * 3 * Math.PI * 2 - uu * along * Math.PI * 2;
+        return Math.pow(Math.cos(phase) * 0.5 + 0.5, 0.42);
       };
       const dhdu = (h(u + eps, v) - h(u - eps, v)) / (2 * eps);
       const dhdv = (h(u, v + eps) - h(u, v - eps)) / (2 * eps);
